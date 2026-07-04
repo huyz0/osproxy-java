@@ -39,6 +39,7 @@ dependencies {
     testImplementation(libs.testcontainers.junit)
     testImplementation(libs.testcontainers.kafka)
     testImplementation(libs.kafka.clients)
+    testImplementation(project(":osproxy-jmh"))
     // Docker engine 29+ refuses docker-java 3.4's pinned API version (1.32,
     // min is now 1.40) with a 400; 3.5 negotiates a supported version.
     testImplementation(platform("com.github.docker-java:docker-java-bom:3.5.1"))

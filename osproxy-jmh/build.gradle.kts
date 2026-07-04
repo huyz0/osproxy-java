@@ -17,10 +17,18 @@ dependencies {
     jmh(libs.jackson.databind)
 }
 
+dependencies {
+    testImplementation(libs.junit.jupiter)
+    testImplementation(libs.assertj)
+    testRuntimeOnly(libs.junit.platform.launcher)
+}
+
 jmh {
     // Fast local runs by default; raise for a real calibration.
     warmupIterations = 2
     iterations = 3
     fork = 1
     profilers = listOf("gc")
+    // Narrow a run to matching benchmarks: ./gradlew :osproxy-jmh:jmh -Pjmh.includes=Dimensional
+    providers.gradleProperty("jmh.includes").orNull?.let { includes.add(it) }
 }
