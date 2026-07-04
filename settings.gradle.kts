@@ -27,4 +27,5 @@ include(
     "osproxy-engine",
     "osproxy-config",
     "osproxy-server",
+    "osproxy-jmh",
 )

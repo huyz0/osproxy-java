@@ -15,6 +15,7 @@ Gradle multi-project whose modules mirror the Rust workspace's crates:
 | `osproxy-engine` | The pipeline: classify → resolve → rewrite → dispatch → shape response |
 | `osproxy-config` | Typed config from `application.yaml` + `OSPROXY_*` env overrides |
 | `osproxy-server` | The executable: Helidon SE ingress, bearer auth, reference tenancy |
+| `osproxy-jmh` | JMH microbenchmarks (`./gradlew :osproxy-jmh:jmh`, gc profiler for allocations/op) |
 
 The module dependency graph is downward-only and enforced by an ArchUnit test
 (`osproxy-server/src/test/.../ModuleDagTest.java`), the analog of the Rust
