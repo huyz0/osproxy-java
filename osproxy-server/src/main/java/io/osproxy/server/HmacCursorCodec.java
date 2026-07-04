@@ -9,8 +9,8 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
- * The reference {@link CursorCodec}: seals {@code cluster|upstreamId} with
- * HMAC-SHA256 under an operator-configured key. Wire form is
+ * The reference {@link CursorCodec}: seals {@code cluster|partition|upstreamId}
+ * with HMAC-SHA256 under an operator-configured key. Wire form is
  * {@code base64url(payload).base64url(mac)}; verification is constant-time
  * and a forged or truncated envelope decodes to empty (fail closed).
  */
@@ -28,8 +28,9 @@ public final class HmacCursorCodec implements CursorCodec {
     }
 
     @Override
-    public String encode(String cluster, String upstreamId) {
-        byte[] payload = (cluster + "|" + upstreamId).getBytes(StandardCharsets.UTF_8);
+    public String encode(String cluster, String partition, String upstreamId) {
+        byte[] payload = (cluster + "|" + partition + "|" + upstreamId)
+                .getBytes(StandardCharsets.UTF_8);
         Base64.Encoder b64 = Base64.getUrlEncoder().withoutPadding();
         return b64.encodeToString(payload) + "." + b64.encodeToString(mac(payload));
     }
@@ -52,11 +53,15 @@ public final class HmacCursorCodec implements CursorCodec {
             return Optional.empty();
         }
         String text = new String(payload, StandardCharsets.UTF_8);
-        int sep = text.indexOf('|');
-        if (sep <= 0 || sep == text.length() - 1) {
+        int first = text.indexOf('|');
+        int second = first < 0 ? -1 : text.indexOf('|', first + 1);
+        if (first <= 0 || second <= first + 1 || second == text.length() - 1) {
             return Optional.empty();
         }
-        return Optional.of(new Decoded(text.substring(0, sep), text.substring(sep + 1)));
+        return Optional.of(new Decoded(
+                text.substring(0, first),
+                text.substring(first + 1, second),
+                text.substring(second + 1)));
     }
 
     private byte[] mac(byte[] payload) {

@@ -11,12 +11,16 @@ import java.util.Optional;
  */
 public interface CursorCodec {
 
-    /** Wraps an upstream cursor id with its cluster affinity. */
-    String encode(String cluster, String upstreamId);
+    /**
+     * Wraps an upstream cursor id with its cluster affinity and the owning
+     * partition — a cursor is not a bearer capability; another tenant
+     * presenting a leaked envelope is refused, not served.
+     */
+    String encode(String cluster, String partition, String upstreamId);
 
     /** Unwraps a wire id; empty when the envelope is invalid or forged. */
     Optional<Decoded> decode(String wireId);
 
     /** The unwrapped affinity. */
-    record Decoded(String cluster, String upstreamId) {}
+    record Decoded(String cluster, String partition, String upstreamId) {}
 }

@@ -14,6 +14,8 @@ Gradle multi-project whose modules mirror the Rust workspace's crates:
 | `osproxy-sink` | Write/read destination seam: OpenSearch HTTP sink + in-memory test sink |
 | `osproxy-engine` | The pipeline: classify → resolve → rewrite → dispatch → shape response |
 | `osproxy-config` | Typed config from `application.yaml` + `OSPROXY_*` env overrides |
+| `osproxy-observe` | Shape-only observability: metrics, explain store, diagnostics directives |
+| `osproxy-capture` | Traffic-capture and acked queue-producer seams (no broker linked) |
 | `osproxy-server` | The executable: Helidon SE ingress, bearer auth, reference tenancy |
 | `osproxy-jmh` | JMH microbenchmarks (`./gradlew :osproxy-jmh:jmh`, gc profiler for allocations/op) |
 
@@ -23,11 +25,30 @@ repo's `cargo xtask arch` gate.
 
 ## Scope
 
-This port currently covers the core data plane (the Rust project's M1–M3):
-document CRUD, `_search`, `_count`, `_bulk`, `_mget`, `_msearch`, with all
-three placement modes (dedicated cluster / dedicated index / shared index) and
-full write↔read symmetry. Migration epochs, scroll/PIT affinity, TLS, capture,
-and the observability planes are later milestones.
+The port covers the Rust project's M1–M7 arc:
+
+- **Data plane** (M1–M3): document CRUD, `_search`, `_count`, `_bulk`,
+  `_mget`, `_msearch`, all three placement modes, full write↔read symmetry.
+- **Ingress hardening** (M4): TLS/mTLS from PEM paths, a TLS-for-mutation
+  gate, request-body cap (413), upstream timeouts and a per-cluster circuit
+  breaker.
+- **Cursors**: scroll and PIT lifecycles with HMAC-sealed cluster affinity
+  (`osproxy.cursor-affinity-key`); forged cursor ids are refused.
+- **Migration** (M5): the SETTLED→DRAINING→CUTOVER state machine with a live
+  epoch write gate — writes hold during cutover, reads never do.
+- **Observability** (M7): W3C trace propagation (ScopedValue-bound, injected
+  at the sink choke point), `GET /_osproxy/metrics`, per-request explain docs
+  at `GET /_osproxy/explain/<id>`, optional JSON request logs, and a
+  fail-closed diagnostics-directive plane published live through
+  `POST /_osproxy/admin/directives`.
+- **Capture & async writes**: traffic-capture and acked-producer seams
+  (broker-free by default) and per-request async write mode
+  (`x-osproxy-write-mode: async` → honest `202 {status, op_id}`).
+
+Everything is shape-only on the wire: error bodies, metrics, explain docs and
+logs never carry tenant values. Deferred: FIPS crypto posture, OTLP export,
+a distributed directive/placement store (the seams exist; the backends are
+deployment choices).
 
 ## Build and test
 

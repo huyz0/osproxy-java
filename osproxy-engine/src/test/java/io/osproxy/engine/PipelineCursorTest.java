@@ -22,9 +22,9 @@ class PipelineCursorTest {
     /** A codec whose seams are visible to assertions (not tamper-proof). */
     private static final CursorCodec PLAIN = new CursorCodec() {
         @Override
-        public String encode(String cluster, String upstreamId) {
-            return "sealed:" + cluster + ":" + Base64.getEncoder().encodeToString(
-                    upstreamId.getBytes());
+        public String encode(String cluster, String partition, String upstreamId) {
+            return "sealed:" + cluster + ":" + partition + ":"
+                    + Base64.getEncoder().encodeToString(upstreamId.getBytes());
         }
 
         @Override
@@ -32,9 +32,9 @@ class PipelineCursorTest {
             if (!wireId.startsWith("sealed:")) {
                 return Optional.empty();
             }
-            String[] parts = wireId.split(":", 3);
+            String[] parts = wireId.split(":", 4);
             return Optional.of(new Decoded(
-                    parts[1], new String(Base64.getDecoder().decode(parts[2]))));
+                    parts[1], parts[2], new String(Base64.getDecoder().decode(parts[3]))));
         }
     };
 
@@ -68,7 +68,7 @@ class PipelineCursorTest {
         assertThat(resp.status()).isEqualTo(200);
         JsonNode doc = json(resp);
         // The wire id is sealed with the cluster, not the raw upstream id.
-        assertThat(doc.get("_scroll_id").textValue()).startsWith("sealed:c1:");
+        assertThat(doc.get("_scroll_id").textValue()).startsWith("sealed:c1:acme:");
         assertThat(doc.at("/hits/hits/0/_id").textValue()).isEqualTo("1");
         assertThat(doc.at("/hits/hits/0/_source/_tenant").isMissingNode()).isTrue();
     }
@@ -136,5 +136,22 @@ class PipelineCursorTest {
                         HttpMethod.POST, "/_search/scroll", "",
                         "{\"scroll_id\":\"x\"}".getBytes()))
                 .status()).isEqualTo(400);
+    }
+
+    @Test
+    void anotherTenantsSealedCursorIsRefused() {
+        String sealed = json(pipeline.handle(request(
+                HttpMethod.POST, "/orders/_search", "scroll=1m", "{}".getBytes())))
+                .get("_scroll_id").textValue();
+
+        // The same envelope presented by another tenant: refused, not served.
+        var other = new RequestCtx(
+                HttpMethod.POST, "/_search/scroll",
+                Classify.classify(HttpMethod.POST, "/_search/scroll").endpoint(),
+                Optional.empty(), Optional.empty(),
+                java.util.List.of(java.util.Map.entry("x-tenant", "globex")),
+                ("{\"scroll_id\":\"" + sealed + "\"}").getBytes(),
+                new Principal("u2", java.util.Map.of("tenant", "globex")), "");
+        assertThat(pipeline.handle(other).status()).isEqualTo(400);
     }
 }

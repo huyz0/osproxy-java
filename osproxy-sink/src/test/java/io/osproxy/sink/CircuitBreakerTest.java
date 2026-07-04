@@ -71,4 +71,19 @@ class CircuitBreakerTest {
         assertThatThrownBy(() -> new CircuitBreaker(clock, 1, -1))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void aStaleSuccessCannotCloseAnOpenCircuit() {
+        var clock = new ManualClock();
+        var breaker = new CircuitBreaker(clock, 1, 1_000);
+        breaker.onFailure(); // opens
+        // A request admitted before the trip reports success late.
+        breaker.onSuccess();
+        assertThat(breaker.isOpen()).isTrue();
+        assertThat(breaker.allow()).isFalse(); // the cooldown still applies
+        clock.advanceNanos(1_000);
+        assertThat(breaker.allow()).isTrue(); // the probe
+        breaker.onSuccess(); // the probe's success does close
+        assertThat(breaker.isOpen()).isFalse();
+    }
 }

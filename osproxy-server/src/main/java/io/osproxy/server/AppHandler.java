@@ -147,19 +147,34 @@ public final class AppHandler {
             return;
         }
 
-        // Bound the working set before buffering: over-cap bodies are refused
-        // up front (fail-closed), not allocated for.
-        long declared = req.headers()
-                .first(HeaderNames.CONTENT_LENGTH)
-                .map(Long::parseLong)
-                .orElse(0L);
+        // Bound the working set before buffering. A declared over-cap length
+        // refuses immediately; a chunked body (no Content-Length) is read
+        // incrementally and cut off the moment it crosses the cap, so the
+        // bound holds without trusting the client to declare anything.
+        long declared;
+        try {
+            declared = req.headers()
+                    .first(HeaderNames.CONTENT_LENGTH)
+                    .map(Long::parseLong)
+                    .orElse(-1L);
+        } catch (NumberFormatException e) {
+            send(res, PipelineResponse.error(ErrorCode.MALFORMED_REQUEST));
+            return;
+        }
         if (declared > maxBodyBytes) {
             send(res, PipelineResponse.error(ErrorCode.PAYLOAD_TOO_LARGE));
             return;
         }
-        byte[] body = req.content().hasEntity() ? req.content().as(byte[].class) : new byte[0];
-        if (body.length > maxBodyBytes) {
+        byte[] body;
+        try {
+            body = req.content().hasEntity()
+                    ? readCapped(req.content().inputStream())
+                    : new byte[0];
+        } catch (OverCapException e) {
             send(res, PipelineResponse.error(ErrorCode.PAYLOAD_TOO_LARGE));
+            return;
+        } catch (java.io.IOException e) {
+            send(res, PipelineResponse.error(ErrorCode.MALFORMED_REQUEST));
             return;
         }
 
@@ -175,8 +190,12 @@ public final class AppHandler {
         long started = System.nanoTime();
         PipelineResponse out = pipeline.handle(ctx);
         record(ctx, res, out, System.nanoTime() - started);
-        capture.ifPresent(c -> c.capture(new io.osproxy.capture.Capture.Record(
-                ctx.method().name(), path, headers, body, out.status(), out.body())));
+        // Credentials never reach a capture backend, whatever the sink is:
+        // redaction happens here at the choke point, not by caller discipline.
+        capture.ifPresent(c -> io.osproxy.capture.Capture.redacting(c)
+                .capture(new io.osproxy.capture.Capture.Record(
+                        ctx.method().name(), path, headers, body,
+                        out.status(), out.body())));
         send(res, out);
     }
 
@@ -185,6 +204,14 @@ public final class AppHandler {
         // Fail closed: no configured token means the endpoint does not exist.
         if (adminToken.isEmpty()) {
             send(res, PipelineResponse.error(ErrorCode.UNSUPPORTED_ENDPOINT));
+            return;
+        }
+        // A publish mutates fleet-wide observability state: the NFR-S1 gate
+        // applies here too, and refusing before reading Authorization keeps
+        // the admin token off cleartext entirely.
+        if (requireTlsForMutation && !req.isSecure()
+                && !req.prologue().method().text().equals("GET")) {
+            send(res, PipelineResponse.error(ErrorCode.UNAUTHORIZED));
             return;
         }
         boolean authorized = req.headers().first(HeaderNames.AUTHORIZATION)
@@ -221,6 +248,23 @@ public final class AppHandler {
         } catch (DirectivesApi.InvalidDirectives e) {
             send(res, PipelineResponse.error(ErrorCode.MALFORMED_REQUEST));
         }
+    }
+
+    private static final class OverCapException extends Exception {}
+
+    /** Reads at most the cap; one byte over aborts (never buffers the rest). */
+    private byte[] readCapped(java.io.InputStream in)
+            throws java.io.IOException, OverCapException {
+        var out = new java.io.ByteArrayOutputStream();
+        byte[] chunk = new byte[8192];
+        int n;
+        while ((n = in.read(chunk)) >= 0) {
+            if (out.size() + n > maxBodyBytes) {
+                throw new OverCapException();
+            }
+            out.write(chunk, 0, n);
+        }
+        return out.toByteArray();
     }
 
     /** Tallies the completed request and echoes its id. */

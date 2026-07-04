@@ -56,7 +56,8 @@ final class Cursors {
         }
         ObjectNode doc = Json.parseObject(upstream.body());
         Shaping.shapeSearchHits(doc, pipeline.view(ctx, decision));
-        sealCursor(doc, "_scroll_id", codec, decision.target().cluster().value());
+        sealCursor(doc, "_scroll_id", codec,
+                decision.target().cluster().value(), decision.partition().value());
         return new PipelineResponse(upstream.status(), Json.writeBytes(doc));
     }
 
@@ -69,10 +70,9 @@ final class Cursors {
         if (!(pit instanceof ObjectNode pitNode) || !pitNode.has("id")) {
             return PipelineResponse.error(ErrorCode.MALFORMED_REQUEST);
         }
-        CursorCodec.Decoded decoded = decode(codec, pitNode.get("id").asText());
-        pitNode.put("id", decoded.upstreamId());
-
         RouteDecision decision = pipeline.router().routeCursor(ctx);
+        CursorCodec.Decoded decoded = decode(codec, decision, pitNode.get("id").asText());
+        pitNode.put("id", decoded.upstreamId());
         Map<String, JsonNode> filter = Transforms.resolveInjected(
                 Transforms.injectedFields(decision.transform()), decision.partition(), ctx);
         byte[] wrapped = Queries.wrapQuery(Json.writeBytes(body), filter);
@@ -84,7 +84,7 @@ final class Cursors {
         }
         ObjectNode doc = Json.parseObject(upstream.body());
         Shaping.shapeSearchHits(doc, pipeline.view(ctx, decision));
-        sealCursor(doc, "pit_id", codec, decoded.cluster());
+        sealCursor(doc, "pit_id", codec, decoded.cluster(), decision.partition().value());
         return new PipelineResponse(upstream.status(), Json.writeBytes(doc));
     }
 
@@ -115,7 +115,8 @@ final class Cursors {
             return PipelineResponse.error(ErrorCode.UPSTREAM_FAILED);
         }
         ObjectNode doc = Json.parseObject(upstream.body());
-        sealCursor(doc, "pit_id", codec, decision.target().cluster().value());
+        sealCursor(doc, "pit_id", codec,
+                decision.target().cluster().value(), decision.partition().value());
         return new PipelineResponse(upstream.status(), Json.writeBytes(doc));
     }
 
@@ -123,22 +124,27 @@ final class Cursors {
             throws SpiException, RewriteException, SinkException {
         ObjectNode body = Json.parseObject(ctx.body());
         JsonNode ids = body.get("pit_id");
+        RouteDecision decision = pipeline.router().routeCursor(ctx);
         String cluster = null;
         if (ids instanceof ArrayNode array) {
             for (int i = 0; i < array.size(); i++) {
-                CursorCodec.Decoded decoded = decode(codec, array.get(i).asText());
+                CursorCodec.Decoded decoded = decode(codec, decision, array.get(i).asText());
+                // One close goes to one cluster; a mixed-cluster array would
+                // silently leak the other clusters' PITs — refuse instead.
+                if (cluster != null && !cluster.equals(decoded.cluster())) {
+                    return PipelineResponse.error(ErrorCode.MALFORMED_REQUEST);
+                }
                 cluster = decoded.cluster();
                 array.set(i, Json.MAPPER.getNodeFactory().textNode(decoded.upstreamId()));
             }
         } else if (ids != null && ids.isTextual()) {
-            CursorCodec.Decoded decoded = decode(codec, ids.textValue());
+            CursorCodec.Decoded decoded = decode(codec, decision, ids.textValue());
             cluster = decoded.cluster();
             body.put("pit_id", decoded.upstreamId());
         }
         if (cluster == null) {
             return PipelineResponse.error(ErrorCode.MALFORMED_REQUEST);
         }
-        RouteDecision decision = pipeline.router().routeCursor(ctx);
         Reader.Response upstream = pipeline.reader().pitClose(
                 affinityTarget(decision, cluster), Json.writeBytes(body));
         return new PipelineResponse(upstream.status(), upstream.body());
@@ -151,10 +157,10 @@ final class Cursors {
         if (id == null || !id.isTextual()) {
             return PipelineResponse.error(ErrorCode.MALFORMED_REQUEST);
         }
-        CursorCodec.Decoded decoded = decode(codec, id.textValue());
+        RouteDecision decision = pipeline.router().routeCursor(ctx);
+        CursorCodec.Decoded decoded = decode(codec, decision, id.textValue());
         body.put("scroll_id", decoded.upstreamId());
 
-        RouteDecision decision = pipeline.router().routeCursor(ctx);
         Reader.Response upstream = pipeline.reader().scrollNext(
                 affinityTarget(decision, decoded.cluster()), Json.writeBytes(body));
         if (!upstream.ok()) {
@@ -162,7 +168,7 @@ final class Cursors {
         }
         ObjectNode doc = Json.parseObject(upstream.body());
         Shaping.shapeSearchHits(doc, pipeline.view(ctx, decision));
-        sealCursor(doc, "_scroll_id", codec, decoded.cluster());
+        sealCursor(doc, "_scroll_id", codec, decoded.cluster(), decision.partition().value());
         return new PipelineResponse(upstream.status(), Json.writeBytes(doc));
     }
 
@@ -173,9 +179,9 @@ final class Cursors {
         if (id == null || !id.isTextual()) {
             return PipelineResponse.error(ErrorCode.MALFORMED_REQUEST);
         }
-        CursorCodec.Decoded decoded = decode(codec, id.textValue());
-        body.put("scroll_id", decoded.upstreamId());
         RouteDecision decision = pipeline.router().routeCursor(ctx);
+        CursorCodec.Decoded decoded = decode(codec, decision, id.textValue());
+        body.put("scroll_id", decoded.upstreamId());
         Reader.Response upstream = pipeline.reader().scrollDelete(
                 affinityTarget(decision, decoded.cluster()), Json.writeBytes(body));
         return new PipelineResponse(upstream.status(), upstream.body());
@@ -193,10 +199,10 @@ final class Cursors {
 
     /** Replaces an upstream cursor id in {@code doc} with its sealed form. */
     private static void sealCursor(
-            ObjectNode doc, String field, CursorCodec codec, String cluster) {
+            ObjectNode doc, String field, CursorCodec codec, String cluster, String partition) {
         JsonNode id = doc.get(field);
         if (id != null && id.isTextual()) {
-            doc.put(field, codec.encode(cluster, id.textValue()));
+            doc.put(field, codec.encode(cluster, partition, id.textValue()));
         }
     }
 
@@ -205,10 +211,20 @@ final class Cursors {
                 new SpiException.UnsupportedEndpoint(io.osproxy.core.EndpointKind.CURSOR));
     }
 
-    /** Decodes or refuses: a forged/invalid envelope is a malformed request. */
-    private static CursorCodec.Decoded decode(CursorCodec codec, String wireId)
-            throws RewriteException {
-        return codec.decode(wireId).orElseThrow(() -> new RewriteException(
-                RewriteException.Kind.INVALID_JSON, "invalid cursor envelope"));
+    /**
+     * Decodes or refuses. A forged/invalid envelope is a malformed request,
+     * and so is another partition's envelope: a leaked cursor id is not a
+     * bearer capability into someone else's data.
+     */
+    private static CursorCodec.Decoded decode(
+            CursorCodec codec, RouteDecision caller, String wireId) throws RewriteException {
+        CursorCodec.Decoded decoded = codec.decode(wireId).orElseThrow(
+                () -> new RewriteException(
+                        RewriteException.Kind.INVALID_JSON, "invalid cursor envelope"));
+        if (!decoded.partition().equals(caller.partition().value())) {
+            throw new RewriteException(
+                    RewriteException.Kind.INVALID_JSON, "cursor belongs to another partition");
+        }
+        return decoded;
     }
 }

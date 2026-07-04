@@ -54,7 +54,7 @@ public record Directive(
             return false;
         }
         // Deterministic sampling: the same request id always lands in the
-        // same bucket, on every instance.
+        // same bucket.
         int bucket = Math.floorMod(requestId.hashCode(), 1000);
         return bucket < samplePerMille;
     }

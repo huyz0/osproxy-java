@@ -24,7 +24,10 @@ class TraceContextTest {
     void malformedTraceparentsAreEmptyNotErrors() {
         assertThat(TraceContext.parse(null)).isEmpty();
         assertThat(TraceContext.parse("")).isEmpty();
-        assertThat(TraceContext.parse("01-" + TRACE + "-" + SPAN + "-01")).isEmpty();
+        // Future versions parse leniently (W3C); the invalid ff does not.
+        assertThat(TraceContext.parse("01-" + TRACE + "-" + SPAN + "-01")).isPresent();
+        assertThat(TraceContext.parse("ff-" + TRACE + "-" + SPAN + "-01")).isEmpty();
+        assertThat(TraceContext.parse("0x-" + TRACE + "-" + SPAN + "-01")).isEmpty();
         assertThat(TraceContext.parse("00-short-" + SPAN + "-01")).isEmpty();
         assertThat(TraceContext.parse("00-" + "0".repeat(32) + "-" + SPAN + "-01")).isEmpty();
         assertThat(TraceContext.parse("00-" + TRACE + "-" + SPAN + "-zz")).isEmpty();

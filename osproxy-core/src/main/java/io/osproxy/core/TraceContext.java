@@ -28,8 +28,10 @@ public record TraceContext(String traceId, String spanId, boolean sampled) {
         if (traceparent == null) {
             return Optional.empty();
         }
+        // W3C: parse future versions leniently (>= 4 fields, any known-shape
+        // version except the invalid ff), reading the fields we understand.
         String[] parts = traceparent.strip().split("-");
-        if (parts.length != 4 || !parts[0].equals("00")) {
+        if (parts.length < 4 || !parts[0].matches("[0-9a-f]{2}") || parts[0].equals("ff")) {
             return Optional.empty();
         }
         try {

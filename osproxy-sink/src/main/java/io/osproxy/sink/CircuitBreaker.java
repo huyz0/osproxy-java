@@ -56,10 +56,15 @@ public final class CircuitBreaker {
         return openedAt.compareAndSet(opened, PROBING);
     }
 
-    /** Reports a successful upstream call: closes the circuit. */
+    /**
+     * Reports a successful upstream call. Closes the circuit only from
+     * CLOSED (resetting the failure streak) or PROBING (the probe passed):
+     * a stale success from a request admitted before the trip must not
+     * close a legitimately open circuit and skip its cooldown.
+     */
     public void onSuccess() {
         consecutiveFailures.set(0);
-        openedAt.set(CLOSED);
+        openedAt.compareAndSet(PROBING, CLOSED);
     }
 
     /** Reports a failed upstream call: may open the circuit. */
