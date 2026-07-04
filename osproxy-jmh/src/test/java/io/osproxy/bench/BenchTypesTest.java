@@ -44,4 +44,27 @@ class BenchTypesTest {
         var zeroBaseline = new PerfProfile(1, baseline, proxied, 0, 100);
         assertThat(zeroBaseline.throughputRatio()).isZero();
     }
+
+    @Test
+    void footprintPassesOnEitherRatioOrAbsoluteBound() {
+        // Tiny idle footprint: a small absolute growth looks huge as a
+        // ratio, but the either/or judge still passes on the absolute bound.
+        var tinyIdle = new FootprintProfile(11 * 1024 * 1024L, 22 * 1024 * 1024L);
+        assertThat(tinyIdle.growthRatio()).isEqualTo(2.0);
+        assertThat(tinyIdle.judge(1.5, 15 * 1024 * 1024L)).isTrue();
+        assertThat(tinyIdle.judge(1.5, 5 * 1024 * 1024L)).isFalse();
+
+        // A real leak fails both.
+        var leaking = new FootprintProfile(50 * 1024 * 1024L, 500 * 1024 * 1024L);
+        assertThat(leaking.judge(1.5, 15 * 1024 * 1024L)).isFalse();
+
+        // No growth at all.
+        var flat = new FootprintProfile(100, 100);
+        assertThat(flat.growthBytes()).isZero();
+        assertThat(flat.growthRatio()).isEqualTo(1.0);
+        assertThat(flat.judge(1.0, 0)).isTrue();
+        assertThat(flat.render()).contains("growth=0.0MiB");
+
+        assertThat(new FootprintProfile(0, 10).growthRatio()).isInfinite();
+    }
 }

@@ -90,12 +90,22 @@ Two layers, mirroring the Rust project's osproxy-bench:
   allocations/op per cell.
 - **E2e perf harness** (`PerfHarnessE2eTest`, integration-tagged): the same
   ingest workload direct-vs-proxied against a real OpenSearch container,
-  swept across concurrency (1/8/32), reported as nearest-rank p50/p95/p99
-  plus added latency and throughput ratio per level. Assertions are
-  host-independent (all requests succeed, throughput rises with
-  concurrency); the numbers print for a human or an LLM judge. Measured on
-  this box: added p50 0.2–0.5 ms, throughput ratio 0.94–0.97, 85 → 1805
-  ops/s from c=1 to c=32.
+  swept across concurrency (1/8/32/64), reported as nearest-rank
+  p50/p95/p99 plus added latency and throughput ratio per level.
+  Assertions are host-independent (all requests succeed, throughput rises
+  with concurrency); the numbers print for a human or an LLM judge.
+  Measured on this box: throughput 91 → 3596 ops/s from c=1 to c=64,
+  throughput ratio 0.93–1.03 throughout, added p50 near zero (some levels
+  measure negative — noise at this sample size).
+- **Footprint/soak** (`SoakE2eTest`, integration-tagged, Linux-only): spawns
+  the real `osproxy-server` artifact as its own OS process (not
+  in-process) so `/proc/<pid>/statm` reports the proxy's actual resident
+  set; forces a GC via `jcmd` before each snapshot so RSS reflects the
+  live set, not uncollected garbage. Drives 20k sequential requests and
+  judges growth on an either/or bound (ratio OR absolute — a tiny idle
+  footprint makes a small absolute growth look huge as a ratio). Measured
+  on this box (256 MiB heap cap): idle ~116 MiB, soak ~231 MiB (1.99x,
+  ~115 MiB) — bounded, not a leak.
 
 Docker engine 29+ note: docker-java's default API version (1.32) is below the
 engine's minimum (1.40), which breaks Testcontainers' environment detection

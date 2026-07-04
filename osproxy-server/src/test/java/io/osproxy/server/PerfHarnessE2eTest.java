@@ -37,8 +37,8 @@ import org.testcontainers.containers.wait.strategy.Wait;
 @Tag("integration")
 class PerfHarnessE2eTest {
 
-    private static final int[] CONCURRENCY_LEVELS = {1, 8, 32};
-    private static final int OPS_PER_LEVEL = 400;
+    private static final int[] CONCURRENCY_LEVELS = {1, 8, 32, 64};
+    private static final int OPS_PER_LEVEL = 1600;
     private static final String DOC = "{\"msg\":\"hello benchmark\",\"n\":7}";
 
     private static GenericContainer<?> opensearch;
