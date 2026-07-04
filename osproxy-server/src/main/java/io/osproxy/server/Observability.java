@@ -1,5 +1,10 @@
 package io.osproxy.server;
 
+import io.osproxy.core.Clock;
+import io.osproxy.core.SystemClock;
+import io.osproxy.observe.DiagLevel;
+import io.osproxy.observe.Directive;
+import io.osproxy.observe.DirectiveSet;
 import io.osproxy.observe.ExplainDoc;
 import io.osproxy.observe.ExplainStore;
 import io.osproxy.observe.Metrics;
@@ -8,24 +13,54 @@ import java.util.Optional;
 
 /**
  * The server's observability bundle: metrics, the explain tape, and the
- * optional one-line-JSON request log. Everything recorded is shape-only.
+ * optional one-line-JSON request log — recording gated per request by the
+ * directive plane. Metrics always tick; the explain capture needs SHAPE;
+ * the log line needs VERBOSE. Everything recorded is shape-only.
  */
 public final class Observability {
 
     private final Metrics metrics = new Metrics();
     private final ExplainStore explainStore;
     private final Optional<PrintStream> requestLog;
+    private final DirectiveSet.Store directives;
+    private final Clock clock;
 
     public Observability(int explainCapacity, Optional<PrintStream> requestLog) {
-        this.explainStore = new ExplainStore(explainCapacity);
-        this.requestLog = requestLog;
+        this(explainCapacity, requestLog,
+                new DirectiveSet.InMemoryStore(DirectiveSet.baseline(
+                        requestLog.isPresent() ? DiagLevel.VERBOSE : DiagLevel.SHAPE)),
+                new SystemClock());
     }
 
-    /** Records one completed request everywhere it belongs. */
-    public void record(ExplainDoc doc) {
+    public Observability(
+            int explainCapacity, Optional<PrintStream> requestLog,
+            DirectiveSet.Store directives, Clock clock) {
+        this.explainStore = new ExplainStore(explainCapacity);
+        this.requestLog = requestLog;
+        this.directives = directives;
+        this.clock = clock;
+    }
+
+    /** The directive store (the admin endpoint publishes into it). */
+    public DirectiveSet.Store directives() {
+        return directives;
+    }
+
+    public Clock clock() {
+        return clock;
+    }
+
+    /** Records one completed request at the directive-effective level. */
+    public void record(ExplainDoc doc, Directive.RequestAttrs attrs) {
         metrics.record(doc.status());
-        explainStore.record(doc);
-        requestLog.ifPresent(out -> out.println(doc.toJson()));
+        DiagLevel level = directives.load()
+                .evaluate(attrs, doc.requestId(), clock.monotonicNanos());
+        if (level.ordinal() >= DiagLevel.SHAPE.ordinal()) {
+            explainStore.record(doc);
+        }
+        if (level == DiagLevel.VERBOSE) {
+            requestLog.ifPresent(out -> out.println(doc.toJson()));
+        }
     }
 
     public Metrics metrics() {

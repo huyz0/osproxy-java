@@ -41,6 +41,7 @@ public final class Main {
         AppHandler handler = new AppHandler(
                 pipeline, new BearerAuth(cfg.tokens()),
                 cfg.maxBodyBytes(), cfg.requireTlsForMutation(), observability);
+        cfg.directiveAdminToken().ifPresent(handler::withAdminToken);
         var builder = WebServer.builder()
                 .port(cfg.port())
                 .routing(handler::route);

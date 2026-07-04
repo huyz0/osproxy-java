@@ -23,6 +23,8 @@ import java.util.Optional;
  * @param cursorAffinityKey HMAC key sealing scroll/PIT cursor affinity;
  *     absent means the cursor endpoints are refused fail-closed
  * @param logRequests emit one shape-only JSON line per request to stdout
+ * @param directiveAdminToken bearer token for the directive admin endpoint;
+ *     absent means the endpoint does not exist (fail closed)
  */
 public record ProxyConfig(
         int port,
@@ -33,7 +35,8 @@ public record ProxyConfig(
         boolean requireTlsForMutation,
         Optional<TlsSettings> tls,
         Optional<String> cursorAffinityKey,
-        boolean logRequests) {
+        boolean logRequests,
+        Optional<String> directiveAdminToken) {
 
     /** PEM paths for the TLS listener; {@code clientCaPath} enables mTLS. */
     public record TlsSettings(String certPath, String keyPath, Optional<String> clientCaPath) {
@@ -64,7 +67,18 @@ public record ProxyConfig(
             long maxBodyBytes, boolean requireTlsForMutation, Optional<TlsSettings> tls,
             Optional<String> cursorAffinityKey) {
         this(port, upstream, index, tokens,
-                maxBodyBytes, requireTlsForMutation, tls, cursorAffinityKey, false);
+                maxBodyBytes, requireTlsForMutation, tls, cursorAffinityKey, false,
+                Optional.empty());
+    }
+
+    /** The pre-directives form (tests). */
+    public ProxyConfig(
+            int port, String upstream, String index, Map<String, String> tokens,
+            long maxBodyBytes, boolean requireTlsForMutation, Optional<TlsSettings> tls,
+            Optional<String> cursorAffinityKey, boolean logRequests) {
+        this(port, upstream, index, tokens,
+                maxBodyBytes, requireTlsForMutation, tls, cursorAffinityKey, logRequests,
+                Optional.empty());
     }
 
     /** The default request-body cap (32 MiB), matching the Rust proxy. */
@@ -123,6 +137,7 @@ public record ProxyConfig(
                 root.get("require-tls-for-mutation").asBoolean().orElse(false),
                 tls,
                 root.get("cursor-affinity-key").asString().asOptional(),
-                root.get("log-requests").asBoolean().orElse(false));
+                root.get("log-requests").asBoolean().orElse(false),
+                root.get("directive-admin-token").asString().asOptional());
     }
 }
