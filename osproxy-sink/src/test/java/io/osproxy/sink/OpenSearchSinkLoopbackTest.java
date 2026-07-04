@@ -187,4 +187,35 @@ class OpenSearchSinkLoopbackTest {
         assertThat(seen.path()).isEqualTo("/legacy-orders/_doc/1");
         assertThat(seen.body()).isEmpty();
     }
+
+    @Test
+    void aBoundForwardHeaderSetReachesEveryKindOfUpstreamCall() throws Exception {
+        // The choke point (traced()) is shared by write, read, and cursor
+        // calls alike, so binding once covers every tenancy-shaped endpoint's
+        // own sink call, not just the verbatim-forward path.
+        List<Map.Entry<String, String>> forwarded = List.of(Map.entry("x-forwarded-test", "bound"));
+        ScopedValue.where(io.osproxy.core.ForwardHeaders.CURRENT, forwarded).run(() -> {
+            SEEN.clear();
+            try {
+                sink.get(target, "acme:1", Optional.empty());
+                sink.write(List.of(new WriteBatch.Op(target,
+                        new DocOp.Index("acme:1", "{}".getBytes(StandardCharsets.UTF_8),
+                                Optional.empty()),
+                        Epoch.INITIAL)));
+            } catch (SinkException e) {
+                throw new RuntimeException(e);
+            }
+        });
+
+        List<Seen> seen = List.copyOf(SEEN);
+        assertThat(seen).hasSize(2);
+        assertThat(seen).allMatch(s -> "bound".equals(s.forwardedTestHeader()));
+    }
+
+    @Test
+    void withNoForwardHeadersBoundNothingExtraIsSent() throws Exception {
+        SEEN.clear();
+        sink.get(target, "acme:1", Optional.empty());
+        assertThat(SEEN.poll().forwardedTestHeader()).isEmpty();
+    }
 }

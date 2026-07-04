@@ -84,8 +84,10 @@ The port covers the Rust project's M1–M7 arc:
   cluster, skipping tenancy entirely — the composable migration shape:
   legacy indices pass through, onboarded ones stay tenant-isolated, fail-closed
   on a non-match. `osproxy.header-forwarding.enabled` (default true) and
-  `.deny` control which client headers ride along on a passthrough forward
-  (mandatory hop-by-hop/framing headers are always stripped).
+  `.deny` control which client headers ride along on *every* upstream call
+  the sink makes for a request — write, read, cursor, and verbatim
+  passthrough forward alike (mandatory hop-by-hop/framing headers are
+  always stripped).
 
 Everything is shape-only on the wire: error bodies, metrics, explain docs,
 spans and logs never carry tenant values.

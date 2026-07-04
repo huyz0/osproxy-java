@@ -134,17 +134,18 @@ public final class Pipeline {
     /**
      * Forwards {@code ctx} verbatim to the passthrough cluster and returns
      * the raw upstream response, unshaped. Reuses the reader's generic
-     * verbatim-forward primitive; carries the client's forwarded header set
-     * (bound per-request by the ingress) so a sidecar deployment's routing
-     * hints and credentials ride through to the upstream.
+     * verbatim-forward primitive; the client's forwarded header set (bound
+     * per-request by the ingress) reaches the upstream through the sink's
+     * own choke point (the same one every other endpoint's call goes
+     * through), not passed explicitly here, so passthrough carries client
+     * headers with the same policy as every other endpoint.
      */
     private PipelineResponse forward(RequestCtx ctx, PassthroughPolicy policy)
             throws SinkException {
         io.osproxy.core.Target target = new io.osproxy.core.Target(
                 policy.cluster(), new io.osproxy.core.IndexName("passthrough"), policy.endpoint());
         Reader.Response outcome = reader.forward(
-                target, ctx.method(), ctx.path(), ctx.rawQuery(), ctx.body(),
-                io.osproxy.core.ForwardHeaders.currentOrEmpty());
+                target, ctx.method(), ctx.path(), ctx.rawQuery(), ctx.body(), List.of());
         return new PipelineResponse(outcome.status(), outcome.body());
     }
 

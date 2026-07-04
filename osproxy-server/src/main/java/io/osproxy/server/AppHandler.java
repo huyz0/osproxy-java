@@ -100,9 +100,10 @@ public final class AppHandler {
      * Sets the client-header-forwarding policy (default: {@link
      * ForwardPolicy#passAll()}, the sidecar-trust default — every client
      * header rides through to the upstream except the mandatory
-     * hop-by-hop/framing set). Only takes effect on requests a passthrough
-     * policy forwards verbatim; the tenancy-shaped endpoints do not yet
-     * thread the forwarded set onto their own upstream calls.
+     * hop-by-hop/framing set). Applies to every upstream call the sink
+     * makes for this request — write, read, cursor, and verbatim forward
+     * alike — via {@link io.osproxy.core.ForwardHeaders}, bound once per
+     * request and read at the sink's one upstream choke point.
      */
     public AppHandler withForwardPolicy(ForwardPolicy policy) {
         this.forwardPolicy = policy;

@@ -124,7 +124,7 @@ public final class OpenSearchSink implements Sink, Reader {
             throws SinkException {
         WebClient client = client(target);
         return request(target, () -> withRouting(
-                client.get("/" + target.index().value() + "/_doc/" + physicalId), routing)
+                traced(client.get("/" + target.index().value() + "/_doc/" + physicalId)), routing)
                 .request());
     }
 
@@ -248,10 +248,25 @@ public final class OpenSearchSink implements Sink, Reader {
 
     /**
      * Injects the current request's {@code traceparent} when a trace is
-     * bound — the one choke point where the proxy's causal chain reaches
-     * the upstream (no header plumbing through the engine).
+     * bound, and the client's forwarded header set when one is bound — the
+     * one choke point where the proxy's causal chain and (when configured)
+     * the client's own headers reach the upstream, for every call this sink
+     * makes (write, read, cursor, and verbatim forward alike). No header
+     * plumbing through the engine: the ingress binds
+     * {@link io.osproxy.core.ForwardHeaders#CURRENT} once per request, this
+     * is the only place that reads it.
+     *
+     * <p>Forwarded headers are applied first, the proxy's own {@code
+     * traceparent} last: pass-all forwarding carries the client's own {@code
+     * traceparent} through like any other header (the client's original
+     * value), but the proxy's minted child-span value is the one that must
+     * reach the upstream so the causal chain (client → proxy → upstream)
+     * stays intact, not replaced by the client's original value.
      */
     private static <T extends io.helidon.webclient.api.ClientRequest<T>> T traced(T request) {
+        for (Map.Entry<String, String> header : io.osproxy.core.ForwardHeaders.currentOrEmpty()) {
+            request.header(io.helidon.http.HeaderNames.create(header.getKey()), header.getValue());
+        }
         if (io.osproxy.core.Tracing.CURRENT.isBound()) {
             request.header(
                     io.helidon.http.HeaderNames.create("traceparent"),
