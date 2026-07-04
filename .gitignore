@@ -3,3 +3,8 @@ build/
 *.class
 .idea/
 *.iml
+
+# Docs site (Astro + Starlight)
+site/node_modules/
+site/dist/
+site/.astro/
