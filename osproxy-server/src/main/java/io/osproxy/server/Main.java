@@ -67,7 +67,14 @@ public final class Main {
                 new TenancyRouter(tenancy),
                 sink, sink,
                 cfg.cursorAffinityKey().map(HmacCursorCodec::new).map(c -> (io.osproxy.engine.CursorCodec) c),
-                asyncSink, passthrough);
+                asyncSink, passthrough)
+                .withDeleteByQueryExpansion(cfg.deleteByQueryExpansion());
+        // Admin pass-through: refused by default; opt in with an allow-list.
+        cfg.adminCluster().ifPresent(clusterName -> {
+            var policy = new io.osproxy.engine.AdminPolicy(
+                    new ClusterId(clusterName), cfg.adminAllowedPrefixes(), cfg.adminEndpoint());
+            pipeline.withAdminPolicy(policy);
+        });
         var requestLog = cfg.logRequests()
                 ? java.util.Optional.of(System.out) : java.util.Optional.<java.io.PrintStream>empty();
         var baseline = cfg.logRequests()

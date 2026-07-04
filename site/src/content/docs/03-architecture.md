@@ -143,8 +143,12 @@ things differ by platform or by scope:
 - **Authorization**: no separate post-authentication `Authorizer` seam yet —
   `BearerAuth` resolves a `Principal`, and that's the extent of the
   built-in auth model.
-- **Admin pass-through**: `_cat`/`_cluster`/`_nodes` are refused, not
-  allow-listed and forwarded.
+- **Streaming request/response bodies**: the Rust project can pipe an
+  upstream body straight through a hit-transform scanner without ever
+  buffering it (ADR-014). This port buffers every request and response body
+  (bounded by `osproxy.max-body-bytes`) — a deliberate simplification, not
+  an oversight, but a real architectural difference worth knowing about if
+  you're proxying very large documents or responses.
 - **etcd-backed control plane**: the Rust project has a reference
   `EtcdDirectiveStore`; the Java port uses HTTP-polling stores
   (`PollingDirectiveStore`/`PollingPlacementStore`) against any HTTP source

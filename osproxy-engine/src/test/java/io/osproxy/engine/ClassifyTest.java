@@ -49,6 +49,19 @@ class ClassifyTest {
     }
 
     @Test
+    void deleteByQueryIsPostOnly() {
+        assertThat(c(HttpMethod.POST, "/orders/_delete_by_query").endpoint())
+                .isEqualTo(EndpointKind.DELETE_BY_QUERY);
+        assertThat(c(HttpMethod.POST, "/orders/_delete_by_query").logicalIndex())
+                .contains("orders");
+        assertThat(c(HttpMethod.GET, "/orders/_delete_by_query").endpoint())
+                .isEqualTo(EndpointKind.UNKNOWN);
+        // No index-less form (delete_by_query always needs a target index).
+        assertThat(c(HttpMethod.POST, "/_delete_by_query").endpoint())
+                .isEqualTo(EndpointKind.UNKNOWN);
+    }
+
+    @Test
     void cursorAdminAndUnknown() {
         assertThat(c(HttpMethod.POST, "/_search/scroll").endpoint()).isEqualTo(EndpointKind.CURSOR);
         assertThat(c(HttpMethod.POST, "/orders/_search/scroll").endpoint())

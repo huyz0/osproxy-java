@@ -60,6 +60,9 @@ the meaning of an existing positional call.
 | `osproxy.header-forwarding.deny` | *(empty)* | Comma-separated extra headers to drop from the forwarded set (case-insensitive), e.g. `authorization`. |
 | `osproxy.cursor-affinity-key` | *(none)* | HMAC key sealing scroll/PIT cursor affinity; absent refuses the cursor endpoints fail-closed. |
 | `osproxy.fips` | `false` | Engage the bundled BouncyCastle FIPS provider in approved-only mode; fails boot loudly if the module's self-tests refuse. |
+| `osproxy.delete-by-query-expansion` | `false` | Opt into the `_delete_by_query` async expansion (only takes effect when async write mode is itself available; see [Async Fan-out Writes](/osproxy-java/09-async-clients/)). |
+| `osproxy.admin-cluster` / `.admin-endpoint` | *(none)* | The cluster (+ optional base URL) `_cat`/`_cluster`/`_nodes` requests forward to when allow-listed; absent means admin is always refused. |
+| `osproxy.admin-allowed-prefixes` | *(empty)* | Comma-separated path prefixes permitted through (e.g. `/_cat/`); empty allows nothing even with a cluster configured. Admin output is cluster-wide, not tenant-scoped — the allow-list is the only safety boundary. |
 
 ### Traffic capture & async fan-out (Kafka)
 

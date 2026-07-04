@@ -38,6 +38,11 @@ public final class Pipeline {
     private final Cursors cursors;
     private final Optional<AsyncWrites.AsyncWriteSink> asyncSink;
     private final Optional<PassthroughPolicy> passthrough;
+    private boolean deleteByQueryExpansionEnabled = false;
+    private Optional<AdminPolicy> adminPolicy = Optional.empty();
+
+    /** The most matches one {@code _delete_by_query} may expand before refusal. */
+    private static final long DBQ_MAX_MATCHES = 10_000;
 
     public Pipeline(TenancyRouter router, Sink sink, Reader reader) {
         this(router, sink, reader, Optional.empty(), Optional.empty());
@@ -75,6 +80,26 @@ public final class Pipeline {
         this.passthrough = passthrough;
     }
 
+    /**
+     * Opts into the {@code _delete_by_query} async expansion (default: off,
+     * the endpoint is refused). Only takes effect when async write mode is
+     * itself available.
+     */
+    public Pipeline withDeleteByQueryExpansion(boolean enabled) {
+        this.deleteByQueryExpansionEnabled = enabled;
+        return this;
+    }
+
+    /**
+     * Sets the admin pass-through policy: {@code _cat}/{@code _cluster}/
+     * {@code _nodes} requests matching an allowed prefix forward verbatim to
+     * the configured cluster (default: no policy, admin is always refused).
+     */
+    public Pipeline withAdminPolicy(AdminPolicy adminPolicy) {
+        this.adminPolicy = Optional.of(adminPolicy);
+        return this;
+    }
+
     TenancyRouter router() {
         return router;
     }
@@ -98,12 +123,17 @@ public final class Pipeline {
             }
             if (AsyncWrites.wantsAsync(ctx)) {
                 // Refuse-don't-lie: async mode exists only for single-doc
-                // writes, and only when a durable sink is wired.
+                // writes and delete-by-query, and only when a durable sink is
+                // wired. Delete-by-query has its own checks below (different
+                // response shapes matching its own refuse-don't-lie contract),
+                // so it is exempted from this generic gate.
                 if (ctx.endpoint() != io.osproxy.core.EndpointKind.INGEST_DOC
-                        && ctx.endpoint() != io.osproxy.core.EndpointKind.DELETE_BY_ID) {
+                        && ctx.endpoint() != io.osproxy.core.EndpointKind.DELETE_BY_ID
+                        && ctx.endpoint() != io.osproxy.core.EndpointKind.DELETE_BY_QUERY) {
                     return PipelineResponse.error(ErrorCode.UNSUPPORTED_ENDPOINT);
                 }
-                if (asyncSink.isEmpty()) {
+                if (ctx.endpoint() != io.osproxy.core.EndpointKind.DELETE_BY_QUERY
+                        && asyncSink.isEmpty()) {
                     return PipelineResponse.error(ErrorCode.UPSTREAM_UNAVAILABLE);
                 }
             }
@@ -111,14 +141,15 @@ public final class Pipeline {
                 case INGEST_DOC -> ingestDoc(ctx);
                 case GET_BY_ID -> getById(ctx);
                 case DELETE_BY_ID -> deleteById(ctx);
+                case DELETE_BY_QUERY -> deleteByQuery(ctx);
                 case SEARCH -> searchOrCount(ctx, true);
                 case COUNT -> searchOrCount(ctx, false);
                 case INGEST_BULK -> multiOps.bulk(ctx);
                 case MULTI_GET -> multiOps.mget(ctx);
                 case MULTI_SEARCH -> multiOps.msearch(ctx);
                 case CURSOR -> cursors.handle(ctx);
-                case ADMIN, UNKNOWN ->
-                        PipelineResponse.error(ErrorCode.UNSUPPORTED_ENDPOINT);
+                case ADMIN -> admin(ctx);
+                case UNKNOWN -> PipelineResponse.error(ErrorCode.UNSUPPORTED_ENDPOINT);
             };
         } catch (SpiException e) {
             return PipelineResponse.error(e.errorCode());
@@ -147,6 +178,130 @@ public final class Pipeline {
         Reader.Response outcome = reader.forward(
                 target, ctx.method(), ctx.path(), ctx.rawQuery(), ctx.body(), List.of());
         return new PipelineResponse(outcome.status(), outcome.body());
+    }
+
+    /**
+     * Forwards an admin ({@code _cat}/{@code _cluster}/{@code _nodes})
+     * request verbatim to the operator-configured admin cluster, when the
+     * path matches an allowed prefix. Admin output is cluster-wide, not
+     * tenant-scoped — the allow-list is the only safety boundary, so a
+     * request that doesn't match one is refused exactly like an unsupported
+     * endpoint, not silently narrowed.
+     */
+    private PipelineResponse admin(RequestCtx ctx) throws SinkException {
+        if (adminPolicy.isEmpty() || !adminPolicy.get().allows(ctx.path())) {
+            return PipelineResponse.error(ErrorCode.UNSUPPORTED_ENDPOINT);
+        }
+        AdminPolicy policy = adminPolicy.get();
+        io.osproxy.core.Target target = new io.osproxy.core.Target(
+                policy.cluster(), new io.osproxy.core.IndexName("admin"), policy.endpoint());
+        Reader.Response outcome = reader.forward(
+                target, ctx.method(), ctx.path(), ctx.rawQuery(), ctx.body(), List.of());
+        return new PipelineResponse(outcome.status(), outcome.body());
+    }
+
+    /**
+     * Runs the {@code _delete_by_query} async expansion: delete-by-query has
+     * no synchronous implementation (a query-driven mutation the fan-out
+     * queue cannot carry as a single op), so in async mode, with expansion
+     * opted in, the proxy runs the partition-scoped match query itself (the
+     * same mandatory isolation filter as a normal search), caps the match
+     * set, and enqueues a concrete delete per matched physical id — refusing
+     * anything else (sync mode, expansion disabled, no queue, over-cap match
+     * set) with a shape matching the rest of the refuse-don't-lie contract.
+     */
+    private PipelineResponse deleteByQuery(RequestCtx ctx)
+            throws SpiException, RewriteException, SinkException {
+        String index = ctx.logicalIndex().orElse("");
+        if (!AsyncWrites.wantsAsync(ctx)) {
+            return dbqUnsupported("delete_by_query is only supported in async write mode", index);
+        }
+        if (!deleteByQueryExpansionEnabled) {
+            return dbqUnsupported("delete_by_query expansion is not enabled on this proxy", index);
+        }
+        if (asyncSink.isEmpty()) {
+            return dbqUnavailable(index);
+        }
+
+        RouteDecision decision = router.route(ctx, null);
+        Map<String, JsonNode> filter = Transforms.resolveInjected(
+                Transforms.injectedFields(decision.transform()), decision.partition(), ctx);
+        byte[] wrapped = Queries.wrapQuery(ctx.body(), filter);
+        byte[] capped = capIdsOnly(wrapped);
+
+        Reader.Response upstream = reader.search(decision.target(), capped);
+        if (!upstream.ok()) {
+            return PipelineResponse.error(ErrorCode.UPSTREAM_FAILED);
+        }
+        JsonNode doc;
+        try {
+            doc = Json.MAPPER.readTree(upstream.body());
+        } catch (java.io.IOException e) {
+            throw new RewriteException(
+                    RewriteException.Kind.INVALID_JSON,
+                    "delete_by_query match response was not valid json");
+        }
+        long total = doc.path("hits").path("total").path("value").asLong(0);
+        if (total > DBQ_MAX_MATCHES) {
+            return dbqUnsupported("delete_by_query match set exceeds the proxy cap", index);
+        }
+
+        Optional<String> routing = routing(Transforms.idRule(decision.transform()), decision);
+        long deleted = 0;
+        var failures = Json.MAPPER.createArrayNode();
+        for (JsonNode hit : doc.path("hits").path("hits")) {
+            JsonNode idNode = hit.get("_id");
+            if (idNode == null) {
+                continue;
+            }
+            WriteBatch.Op writeOp = new WriteBatch.Op(
+                    decision.target(),
+                    new DocOp.Delete(idNode.asText(), routing),
+                    decision.epoch());
+            PipelineResponse enqueued = AsyncWrites.enqueue(asyncSink.get(), writeOp);
+            if (enqueued.status() == 202) {
+                deleted++;
+            } else {
+                failures.add(Json.MAPPER.createObjectNode()
+                        .put("status", 503)
+                        .put("type", "enqueue_failed"));
+            }
+        }
+
+        ObjectNode out = Json.MAPPER.createObjectNode();
+        out.put("took", 0);
+        out.put("timed_out", false);
+        out.put("total", total);
+        out.put("deleted", deleted);
+        out.put("version_conflicts", 0);
+        out.put("batches", 1);
+        out.set("failures", failures);
+        return new PipelineResponse(200, Json.writeBytes(out));
+    }
+
+    /** Caps a partition-filtered search body to ids-only, with an accurate total. */
+    private static byte[] capIdsOnly(byte[] wrappedSearchBody) throws RewriteException {
+        ObjectNode doc = Json.parseObject(wrappedSearchBody);
+        doc.put("size", DBQ_MAX_MATCHES + 1);
+        doc.put("_source", false);
+        doc.put("track_total_hits", true);
+        return Json.writeBytes(doc);
+    }
+
+    private static PipelineResponse dbqUnsupported(String reason, String index) {
+        ObjectNode out = Json.MAPPER.createObjectNode();
+        out.put("status", "rejected");
+        out.put("error", reason);
+        out.put("_index", index);
+        return new PipelineResponse(400, Json.writeBytes(out));
+    }
+
+    private static PipelineResponse dbqUnavailable(String index) {
+        ObjectNode out = Json.MAPPER.createObjectNode();
+        out.put("status", "rejected");
+        out.put("error", "async write mode is not available on this proxy");
+        out.put("_index", index);
+        return new PipelineResponse(422, Json.writeBytes(out));
     }
 
     private PipelineResponse ingestDoc(RequestCtx ctx)

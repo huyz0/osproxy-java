@@ -239,4 +239,51 @@ class ProxyConfigTest {
         assertThat(cfg.headerForwardingEnabled()).isFalse();
         assertThat(cfg.headerForwardingDeny()).containsExactly("authorization");
     }
+
+    @Test
+    void deleteByQueryExpansionDefaultsOffAndCanBeEnabled() {
+        var defaults = ProxyConfig.load(config(Map.of(
+                "osproxy.upstream", "http://localhost:9200",
+                "osproxy.index", "shared")));
+        assertThat(defaults.deleteByQueryExpansion()).isFalse();
+
+        var enabled = ProxyConfig.load(config(Map.of(
+                "osproxy.upstream", "http://localhost:9200",
+                "osproxy.index", "shared",
+                "osproxy.delete-by-query-expansion", "true")));
+        assertThat(enabled.deleteByQueryExpansion()).isTrue();
+    }
+
+    @Test
+    void adminPassThroughDefaultsAbsentAndCanBeConfigured() {
+        var defaults = ProxyConfig.load(config(Map.of(
+                "osproxy.upstream", "http://localhost:9200",
+                "osproxy.index", "shared")));
+        assertThat(defaults.adminCluster()).isEmpty();
+        assertThat(defaults.adminAllowedPrefixes()).isEmpty();
+
+        var configured = ProxyConfig.load(config(Map.of(
+                "osproxy.upstream", "http://localhost:9200",
+                "osproxy.index", "shared",
+                "osproxy.admin-cluster", "ops",
+                "osproxy.admin-endpoint", "http://ops:9200",
+                "osproxy.admin-allowed-prefixes", "/_cat/, /_cluster/health")));
+        assertThat(configured.adminCluster()).contains("ops");
+        assertThat(configured.adminEndpoint()).contains("http://ops:9200");
+        assertThat(configured.adminAllowedPrefixes())
+                .containsExactly("/_cat/", "/_cluster/health");
+    }
+
+    @Test
+    void builderSetsDeleteByQueryAndAdminFields() {
+        var cfg = ProxyConfig.builder(9200, "http://localhost:9200", "shared")
+                .deleteByQueryExpansion(true)
+                .admin("ops", java.util.List.of("/_cat/"))
+                .adminEndpoint("http://ops:9200")
+                .build();
+        assertThat(cfg.deleteByQueryExpansion()).isTrue();
+        assertThat(cfg.adminCluster()).contains("ops");
+        assertThat(cfg.adminAllowedPrefixes()).containsExactly("/_cat/");
+        assertThat(cfg.adminEndpoint()).contains("http://ops:9200");
+    }
 }

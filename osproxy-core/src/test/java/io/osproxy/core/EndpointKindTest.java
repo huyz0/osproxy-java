@@ -10,7 +10,8 @@ class EndpointKindTest {
     @Test
     void writeEndpointsAreExactlyTheMutatingOnes() {
         Set<EndpointKind> writes = Set.of(
-                EndpointKind.INGEST_DOC, EndpointKind.INGEST_BULK, EndpointKind.DELETE_BY_ID);
+                EndpointKind.INGEST_DOC, EndpointKind.INGEST_BULK, EndpointKind.DELETE_BY_ID,
+                EndpointKind.DELETE_BY_QUERY);
         for (EndpointKind kind : EndpointKind.values()) {
             assertThat(kind.isWrite()).isEqualTo(writes.contains(kind));
         }

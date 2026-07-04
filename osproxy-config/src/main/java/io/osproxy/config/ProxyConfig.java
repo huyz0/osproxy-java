@@ -65,6 +65,16 @@ import java.util.Optional;
  * @param headerForwardingDeny extra client headers to drop from the
  *     forwarded set (case-insensitive), on top of the mandatory
  *     hop-by-hop/framing set
+ * @param deleteByQueryExpansion opt into the {@code _delete_by_query} async
+ *     expansion (default false: the endpoint is refused). Only takes effect
+ *     when async write mode is itself available.
+ * @param adminCluster the cluster {@code _cat}/{@code _cluster}/{@code
+ *     _nodes} requests forward to when allow-listed; absent means admin is
+ *     always refused
+ * @param adminEndpoint the admin cluster's base URL, when set
+ * @param adminAllowedPrefixes path prefixes permitted through to {@code
+ *     adminCluster} (e.g. {@code "/_cat/"}); empty allows nothing even with
+ *     a cluster configured
  */
 public record ProxyConfig(
         int port,
@@ -92,7 +102,11 @@ public record ProxyConfig(
         Optional<String> passthroughEndpoint,
         List<String> passthroughIndices,
         boolean headerForwardingEnabled,
-        List<String> headerForwardingDeny) {
+        List<String> headerForwardingDeny,
+        boolean deleteByQueryExpansion,
+        Optional<String> adminCluster,
+        Optional<String> adminEndpoint,
+        List<String> adminAllowedPrefixes) {
 
     /** PEM paths for the TLS listener; {@code clientCaPath} enables mTLS. */
     public record TlsSettings(String certPath, String keyPath, Optional<String> clientCaPath) {
@@ -212,7 +226,8 @@ public record ProxyConfig(
                 directiveAdminToken, fips, otlpEndpoint, serviceName,
                 directivesUrl, directivesPollSeconds, fanoutBootstrapServers, fanoutTopic,
                 placementsUrl, placementsPollSeconds, debugEndpoints, logDiagnosticCaptures,
-                Optional.empty(), Optional.empty(), List.of(), true, List.of());
+                Optional.empty(), Optional.empty(), List.of(), true, List.of(),
+                false, Optional.empty(), Optional.empty(), List.of());
     }
 
     /** The default request-body cap (32 MiB), matching the Rust proxy. */
@@ -256,6 +271,10 @@ public record ProxyConfig(
         private List<String> passthroughIndices = List.of();
         private boolean headerForwardingEnabled = true;
         private List<String> headerForwardingDeny = List.of();
+        private boolean deleteByQueryExpansion;
+        private Optional<String> adminCluster = Optional.empty();
+        private Optional<String> adminEndpoint = Optional.empty();
+        private List<String> adminAllowedPrefixes = List.of();
 
         private Builder(int port, String upstream, String index) {
             this.port = port;
@@ -374,6 +393,22 @@ public record ProxyConfig(
             return this;
         }
 
+        public Builder deleteByQueryExpansion(boolean deleteByQueryExpansion) {
+            this.deleteByQueryExpansion = deleteByQueryExpansion;
+            return this;
+        }
+
+        public Builder admin(String cluster, List<String> allowedPrefixes) {
+            this.adminCluster = Optional.of(cluster);
+            this.adminAllowedPrefixes = allowedPrefixes;
+            return this;
+        }
+
+        public Builder adminEndpoint(String adminEndpoint) {
+            this.adminEndpoint = Optional.of(adminEndpoint);
+            return this;
+        }
+
         public ProxyConfig build() {
             return new ProxyConfig(
                     port, upstream, index, tokens,
@@ -382,7 +417,8 @@ public record ProxyConfig(
                     directivesUrl, directivesPollSeconds, fanoutBootstrapServers, fanoutTopic,
                     placementsUrl, placementsPollSeconds, debugEndpoints, logDiagnosticCaptures,
                     passthroughCluster, passthroughEndpoint, passthroughIndices,
-                    headerForwardingEnabled, headerForwardingDeny);
+                    headerForwardingEnabled, headerForwardingDeny,
+                    deleteByQueryExpansion, adminCluster, adminEndpoint, adminAllowedPrefixes);
         }
     }
 
@@ -410,6 +446,7 @@ public record ProxyConfig(
         tokens = Map.copyOf(tokens);
         passthroughIndices = List.copyOf(passthroughIndices);
         headerForwardingDeny = List.copyOf(headerForwardingDeny);
+        adminAllowedPrefixes = List.copyOf(adminAllowedPrefixes);
     }
 
     /** A config that failed validation; the message says which key and why. */
@@ -462,7 +499,11 @@ public record ProxyConfig(
                 root.get("passthrough-endpoint").asString().asOptional(),
                 csv(root.get("passthrough-indices").asString().asOptional()),
                 root.get("header-forwarding.enabled").asBoolean().orElse(true),
-                csv(root.get("header-forwarding.deny").asString().asOptional()));
+                csv(root.get("header-forwarding.deny").asString().asOptional()),
+                root.get("delete-by-query-expansion").asBoolean().orElse(false),
+                root.get("admin-cluster").asString().asOptional(),
+                root.get("admin-endpoint").asString().asOptional(),
+                csv(root.get("admin-allowed-prefixes").asString().asOptional()));
     }
 
     /** A comma-separated list value, trimmed and empties dropped ({@code []} when unset). */

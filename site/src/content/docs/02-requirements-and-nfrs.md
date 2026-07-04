@@ -41,8 +41,9 @@ dispatched accordingly:
 | `SEARCH` | `POST /idx/_search` | yes (filter + strip) |
 | `MULTI_SEARCH` | `POST /_msearch` | yes (per-query) |
 | `COUNT` | `POST /idx/_count` | yes (filter) |
+| `DELETE_BY_QUERY` | `POST /idx/_delete_by_query` | yes (async-mode only, opt-in expansion) |
 | `CURSOR` | `_search/scroll`, `_search/point_in_time` | affinity-pinned |
-| `ADMIN` | `_cat`, `_cluster`, `_nodes` | refused (no admin pass-through yet) |
+| `ADMIN` | `_cat`, `_cluster`, `_nodes` | refused by default; opt-in allow-list pass-through |
 
 A request whose logical index matches a configured passthrough policy skips
 this table entirely and forwards verbatim — see

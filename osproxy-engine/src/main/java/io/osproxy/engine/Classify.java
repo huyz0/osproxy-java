@@ -67,6 +67,8 @@ public final class Classify {
                     EndpointKind.MULTI_GET, index, null, segments, 2);
             case "_msearch" -> only(method == RequestCtx.HttpMethod.POST,
                     EndpointKind.MULTI_SEARCH, index, null, segments, 2);
+            case "_delete_by_query" -> only(method == RequestCtx.HttpMethod.POST,
+                    EndpointKind.DELETE_BY_QUERY, index, null, segments, 2);
             default -> UNKNOWN;
         };
     }

@@ -22,9 +22,15 @@ public enum EndpointKind {
     MULTI_GET("multi-get"),
     /** {@code DELETE /{index}/_doc/{id}}. */
     DELETE_BY_ID("delete-by-id"),
+    /**
+     * {@code POST /{index}/_delete_by_query}. Async-write-mode only, and only
+     * with expansion opted in: the proxy runs the partition-scoped match
+     * query itself and enqueues a concrete delete per matched id.
+     */
+    DELETE_BY_QUERY("delete-by-query"),
     /** Scroll/PIT lifecycle — classified, but out of this slice's scope. */
     CURSOR("cursor"),
-    /** {@code _cat/_cluster/_nodes} operator surface — pass-through policy, later slice. */
+    /** {@code _cat/_cluster/_nodes} operator surface — opt-in pass-through policy. */
     ADMIN("admin"),
     /** Anything unmatched: rejected fail-closed. */
     UNKNOWN("unknown");
@@ -44,7 +50,7 @@ public enum EndpointKind {
     public boolean isTenancyAware() {
         return switch (this) {
             case INGEST_DOC, INGEST_BULK, SEARCH, MULTI_SEARCH, COUNT,
-                    GET_BY_ID, MULTI_GET, DELETE_BY_ID, CURSOR -> true;
+                    GET_BY_ID, MULTI_GET, DELETE_BY_ID, DELETE_BY_QUERY, CURSOR -> true;
             case ADMIN, UNKNOWN -> false;
         };
     }
@@ -52,7 +58,7 @@ public enum EndpointKind {
     /** Whether this endpoint mutates data (and is therefore epoch-stamped). */
     public boolean isWrite() {
         return switch (this) {
-            case INGEST_DOC, INGEST_BULK, DELETE_BY_ID -> true;
+            case INGEST_DOC, INGEST_BULK, DELETE_BY_ID, DELETE_BY_QUERY -> true;
             default -> false;
         };
     }
