@@ -1,0 +1,11 @@
+#!/bin/sh
+# The full local gate must be green before a commit lands.
+set -e
+cd "$(git rev-parse --show-toplevel)"
+# Hooks run without the interactive shell profile; resolve Java via SDKMAN.
+if [ -z "$JAVA_HOME" ] && [ -d "$HOME/.sdkman/candidates/java/current" ]; then
+  JAVA_HOME="$HOME/.sdkman/candidates/java/current"
+  export JAVA_HOME
+fi
+./gradlew --quiet check
+echo "pre-commit: ok"

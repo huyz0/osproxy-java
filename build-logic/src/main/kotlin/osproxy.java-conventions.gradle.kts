@@ -1,0 +1,62 @@
+// The one convention every module applies: Java 25, warnings are errors,
+// JUnit 5, and a JaCoCo line-coverage floor (the analog of the Rust repo's
+// `cargo xtask coverage` gate). Kept deliberately small — module build files
+// declare only their dependencies.
+plugins {
+    `java-library`
+    jacoco
+}
+
+group = "io.osproxy"
+version = "0.1.0"
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+tasks.withType<JavaCompile>().configureEach {
+    options.encoding = "UTF-8"
+    options.release = 25
+    // Warnings are defects, as in the Rust workspace's `clippy -D warnings`.
+    options.compilerArgs.addAll(listOf("-Xlint:all", "-Werror"))
+}
+
+tasks.withType<Test>().configureEach {
+    useJUnitPlatform()
+    testLogging {
+        events("failed", "skipped")
+        showStackTraces = true
+    }
+}
+
+// Coverage floor per module (90% lines), verified as part of `check`.
+// The server module relaxes this for its main() wiring — see its build file.
+tasks.jacocoTestCoverageVerification {
+    violationRules {
+        rule {
+            limit {
+                counter = "LINE"
+                value = "COVEREDRATIO"
+                minimum = "0.90".toBigDecimal()
+            }
+        }
+    }
+}
+
+tasks.jacocoTestReport {
+    dependsOn(tasks.test)
+    reports {
+        xml.required = true
+        html.required = true
+    }
+}
+
+tasks.check {
+    dependsOn(tasks.jacocoTestCoverageVerification)
+}
+
+tasks.jacocoTestCoverageVerification {
+    dependsOn(tasks.test)
+}

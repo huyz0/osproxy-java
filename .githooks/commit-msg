@@ -1,0 +1,13 @@
+#!/bin/sh
+# Conventional commit subject + Claude trailer, same rules as the Rust repos.
+msg_file="$1"
+subject=$(head -n1 "$msg_file")
+if ! printf '%s' "$subject" | grep -qE '^(feat|fix|docs|test|chore|refactor|perf|build|ci)(\([a-z0-9-]+\))?: [a-z]'; then
+  echo "commit-msg: subject must be 'type(scope): lowercase description'" >&2
+  echo "  types: feat fix docs test chore refactor perf build ci" >&2
+  exit 1
+fi
+if ! grep -q '^Co-Authored-By: Claude' "$msg_file"; then
+  echo "commit-msg: missing 'Co-Authored-By: Claude ...' trailer" >&2
+  exit 1
+fi
