@@ -24,6 +24,7 @@ dependencies {
     implementation(project(":osproxy-observe"))
     implementation(project(":osproxy-capture"))
     implementation(project(":osproxy-otlp"))
+    implementation(project(":osproxy-kafka"))
     implementation(project(":osproxy-rewrite"))
     implementation(libs.helidon.webserver)
     // The FIPS 140-3 validated JCE module (CMVP cert on the BC-FIPS 2.1 line).
@@ -36,6 +37,8 @@ dependencies {
     testImplementation(libs.archunit)
     testImplementation(libs.testcontainers)
     testImplementation(libs.testcontainers.junit)
+    testImplementation(libs.testcontainers.kafka)
+    testImplementation(libs.kafka.clients)
     // Docker engine 29+ refuses docker-java 3.4's pinned API version (1.32,
     // min is now 1.40) with a 400; 3.5 negotiates a supported version.
     testImplementation(platform("com.github.docker-java:docker-java-bom:3.5.1"))

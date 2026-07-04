@@ -11,3 +11,7 @@ osproxy:
   # otlp-endpoint: "http://localhost:4318"
   # directives-url: "http://config-service/osproxy/directives"
   # fips: true
+  # placements-url: "http://config-service/osproxy/placements"
+  # fanout:
+  #   bootstrap-servers: "localhost:9092"
+  #   topic: "osproxy-writes"

@@ -36,12 +36,14 @@ class ModuleDagTest {
                 .layer("observe").definedBy("io.osproxy.observe..")
                 .layer("capture").definedBy("io.osproxy.capture..")
                 .layer("otlp").definedBy("io.osproxy.otlp..")
+                .layer("kafka").definedBy("io.osproxy.kafka..")
                 .layer("server").definedBy("io.osproxy.server..")
                 .whereLayer("server").mayNotBeAccessedByAnyLayer()
                 .whereLayer("config").mayOnlyBeAccessedByLayers("server")
                 .whereLayer("observe").mayOnlyBeAccessedByLayers("otlp", "server")
-                .whereLayer("capture").mayOnlyBeAccessedByLayers("server")
+                .whereLayer("capture").mayOnlyBeAccessedByLayers("kafka", "server")
                 .whereLayer("otlp").mayOnlyBeAccessedByLayers("server")
+                .whereLayer("kafka").mayOnlyBeAccessedByLayers("server")
                 .whereLayer("engine").mayOnlyBeAccessedByLayers("server")
                 .whereLayer("sink").mayOnlyBeAccessedByLayers("engine", "server")
                 .whereLayer("tenancy").mayOnlyBeAccessedByLayers("engine", "server")
@@ -50,7 +52,7 @@ class ModuleDagTest {
                         "rewrite", "tenancy", "sink", "engine", "server")
                 .whereLayer("core").mayOnlyBeAccessedByLayers(
                         "spi", "rewrite", "tenancy", "sink", "engine", "config",
-                        "observe", "capture", "otlp", "server")
+                        "observe", "capture", "otlp", "kafka", "server")
                 .check(classes);
     }
 }

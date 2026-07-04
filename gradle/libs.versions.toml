@@ -11,6 +11,7 @@ archunit = "1.4.1"
 testcontainers = "1.21.3"
 awaitility = "4.3.0"
 bcfips = "2.1.0"
+kafka = "4.3.0"
 
 [libraries]
 helidon-webserver = { module = "io.helidon.webserver:helidon-webserver", version.ref = "helidon" }
@@ -28,3 +29,5 @@ testcontainers = { module = "org.testcontainers:testcontainers", version.ref = "
 testcontainers-junit = { module = "org.testcontainers:junit-jupiter", version.ref = "testcontainers" }
 awaitility = { module = "org.awaitility:awaitility", version.ref = "awaitility" }
 bc-fips = { module = "org.bouncycastle:bc-fips", version.ref = "bcfips" }
+kafka-clients = { module = "org.apache.kafka:kafka-clients", version.ref = "kafka" }
+testcontainers-kafka = { module = "org.testcontainers:kafka", version.ref = "testcontainers" }

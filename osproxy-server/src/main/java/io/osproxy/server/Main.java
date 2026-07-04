@@ -34,10 +34,36 @@ public final class Main {
         }
         ClusterId cluster = new ClusterId("primary");
         OpenSearchSink sink = new OpenSearchSink(Map.of(cluster, cfg.upstream()));
+        // Async write mode goes live only with a broker configured; the sink
+        // adapter blocks on the acked produce (that is the 202 contract).
+        var asyncSink = cfg.fanoutBootstrapServers()
+                .map(servers -> {
+                    var producer = new io.osproxy.kafka.KafkaAckProducer(servers);
+                    return (io.osproxy.engine.AsyncWrites.AsyncWriteSink) (key, envelope) ->
+                            producer.produceAcked(
+                                    cfg.fanoutTopic(),
+                                    key.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                                    envelope);
+                });
+        var reference = new ReferenceTenancy(cluster, new IndexName(cfg.index()));
+        io.osproxy.spi.TenancySpi tenancy = cfg.placementsUrl()
+                .<io.osproxy.spi.TenancySpi>map(url -> {
+                    var table = new io.osproxy.tenancy.PlacementTable();
+                    table.setDefault(new io.osproxy.spi.Placement.SharedIndex(
+                            cluster, new IndexName(cfg.index()),
+                            java.util.List.of(new io.osproxy.spi.InjectedField(
+                                    ReferenceTenancy.TENANT_FIELD,
+                                    io.osproxy.spi.InjectedValue.PartitionIdValue.INSTANCE))));
+                    new PollingPlacementStore(url, table, cfg.placementsPollSeconds() * 1000L);
+                    return new io.osproxy.tenancy.MigrationGatedTenancy(
+                            reference, table, new io.osproxy.tenancy.MigrationControl(table));
+                })
+                .orElse(reference);
         Pipeline pipeline = new Pipeline(
-                new TenancyRouter(new ReferenceTenancy(cluster, new IndexName(cfg.index()))),
+                new TenancyRouter(tenancy),
                 sink, sink,
-                cfg.cursorAffinityKey().map(HmacCursorCodec::new).map(c -> (io.osproxy.engine.CursorCodec) c));
+                cfg.cursorAffinityKey().map(HmacCursorCodec::new).map(c -> (io.osproxy.engine.CursorCodec) c),
+                asyncSink);
         var requestLog = cfg.logRequests()
                 ? java.util.Optional.of(System.out) : java.util.Optional.<java.io.PrintStream>empty();
         var baseline = cfg.logRequests()

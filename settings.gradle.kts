@@ -27,6 +27,7 @@ include(
     "osproxy-observe",
     "osproxy-capture",
     "osproxy-otlp",
+    "osproxy-kafka",
     "osproxy-engine",
     "osproxy-config",
     "osproxy-server",

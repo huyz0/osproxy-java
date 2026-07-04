@@ -15,7 +15,9 @@ Gradle multi-project whose modules mirror the Rust workspace's crates:
 | `osproxy-engine` | The pipeline: classify → resolve → rewrite → dispatch → shape response |
 | `osproxy-config` | Typed config from `application.yaml` + `OSPROXY_*` env overrides |
 | `osproxy-observe` | Shape-only observability: metrics, explain store, diagnostics directives |
-| `osproxy-capture` | Traffic-capture and acked queue-producer seams (no broker linked) |
+| `osproxy-capture` | Traffic-capture and acked queue-producer seams (broker-free) |
+| `osproxy-kafka` | The real `AckProducer` over kafka-clients (`acks=all`, idempotent) |
+| `osproxy-otlp` | OTLP/HTTP span export (fire-and-forget, drop-if-saturated) |
 | `osproxy-server` | The executable: Helidon SE ingress, bearer auth, reference tenancy |
 | `osproxy-jmh` | JMH microbenchmarks (`./gradlew :osproxy-jmh:jmh`, gc profiler for allocations/op) |
 
@@ -41,9 +43,11 @@ The port covers the Rust project's M1–M7 arc:
   at `GET /_osproxy/explain/<id>`, optional JSON request logs, and a
   fail-closed diagnostics-directive plane published live through
   `POST /_osproxy/admin/directives`.
-- **Capture & async writes**: traffic-capture and acked-producer seams
-  (broker-free by default) and per-request async write mode
-  (`x-osproxy-write-mode: async` → honest `202 {status, op_id}`).
+- **Capture & async writes**: traffic-capture and acked-producer seams,
+  plus the real Kafka producer (`osproxy.fanout.bootstrap-servers` +
+  `fanout.topic`, `acks=all`, idempotent) behind per-request async write
+  mode (`x-osproxy-write-mode: async` → honest `202 {status, op_id}` only
+  after the broker acknowledged — e2e-verified against a real broker).
 - **FIPS posture** (M6): the TLS listener is always pinned to the approved
   set (TLS 1.2/1.3, AES-GCM only, live-negotiation-tested), and
   `osproxy.fips: true` engages the bundled BouncyCastle FIPS module (the
@@ -54,15 +58,15 @@ The port covers the Rust project's M1–M7 arc:
   export (`osproxy-otlp`): one shape-only SERVER span per request POSTed to
   `{endpoint}/v1/traces`, bounded in-flight budget that sheds spans behind a
   slow collector, never on the request path.
-- **Fleet directives**: `osproxy.directives-url` polls the directive set
-  from any HTTP source (an etcd gateway, a config service, an object store)
-  with fail-closed decoding and keep-last-good semantics — every instance
-  polling the same URL converges without restarts.
+- **Fleet directives & placements**: `osproxy.directives-url` and
+  `osproxy.placements-url` poll their documents from any HTTP source (an
+  etcd gateway, a config service, an object store) with fail-closed
+  decoding and keep-last-good semantics — every instance polling the same
+  URL converges without restarts. Placement changes bump the partition's
+  epoch only on a real move, engaging the stale-write gate.
 
 Everything is shape-only on the wire: error bodies, metrics, explain docs,
-spans and logs never carry tenant values. Still external by design: a real
-Kafka producer behind the AckProducer seam, and a distributed placement
-store (the PlacementTable + MigrationControl seams are where one plugs in).
+spans and logs never carry tenant values.
 
 ## Build and test
 

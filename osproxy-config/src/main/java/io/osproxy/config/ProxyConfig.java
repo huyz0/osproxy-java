@@ -31,6 +31,12 @@ import java.util.Optional;
  * @param directivesUrl HTTP source polled for the fleet directive set;
  *     absent means directives are instance-local (the admin endpoint)
  * @param directivesPollSeconds the poll interval for {@code directivesUrl}
+ * @param fanoutBootstrapServers Kafka bootstrap servers for async write
+ *     mode; absent means async writes are refused (503)
+ * @param fanoutTopic the topic async write envelopes land on
+ * @param placementsUrl HTTP source polled for fleet placements; absent
+ *     means every partition stays on the reference shared index
+ * @param placementsPollSeconds the poll interval for {@code placementsUrl}
  */
 public record ProxyConfig(
         int port,
@@ -47,7 +53,11 @@ public record ProxyConfig(
         Optional<String> otlpEndpoint,
         String serviceName,
         Optional<String> directivesUrl,
-        int directivesPollSeconds) {
+        int directivesPollSeconds,
+        Optional<String> fanoutBootstrapServers,
+        String fanoutTopic,
+        Optional<String> placementsUrl,
+        int placementsPollSeconds) {
 
     /** PEM paths for the TLS listener; {@code clientCaPath} enables mTLS. */
     public record TlsSettings(String certPath, String keyPath, Optional<String> clientCaPath) {
@@ -101,6 +111,7 @@ public record ProxyConfig(
         this(port, upstream, index, tokens,
                 maxBodyBytes, requireTlsForMutation, tls, cursorAffinityKey, logRequests,
                 directiveAdminToken, false, Optional.empty(), "osproxy",
+                Optional.empty(), 10, Optional.empty(), "osproxy-writes",
                 Optional.empty(), 10);
     }
 
@@ -113,6 +124,23 @@ public record ProxyConfig(
         this(port, upstream, index, tokens,
                 maxBodyBytes, requireTlsForMutation, tls, cursorAffinityKey, logRequests,
                 directiveAdminToken, fips, Optional.empty(), "osproxy",
+                Optional.empty(), 10, Optional.empty(), "osproxy-writes",
+                Optional.empty(), 10);
+    }
+
+    /** The pre-placements form (tests). */
+    public ProxyConfig(
+            int port, String upstream, String index, Map<String, String> tokens,
+            long maxBodyBytes, boolean requireTlsForMutation, Optional<TlsSettings> tls,
+            Optional<String> cursorAffinityKey, boolean logRequests,
+            Optional<String> directiveAdminToken, boolean fips,
+            Optional<String> otlpEndpoint, String serviceName,
+            Optional<String> directivesUrl, int directivesPollSeconds,
+            Optional<String> fanoutBootstrapServers, String fanoutTopic) {
+        this(port, upstream, index, tokens,
+                maxBodyBytes, requireTlsForMutation, tls, cursorAffinityKey, logRequests,
+                directiveAdminToken, fips, otlpEndpoint, serviceName,
+                directivesUrl, directivesPollSeconds, fanoutBootstrapServers, fanoutTopic,
                 Optional.empty(), 10);
     }
 
@@ -178,6 +206,10 @@ public record ProxyConfig(
                 root.get("otlp-endpoint").asString().asOptional(),
                 root.get("service-name").asString().orElse("osproxy"),
                 root.get("directives-url").asString().asOptional(),
-                root.get("directives-poll-seconds").asInt().orElse(10));
+                root.get("directives-poll-seconds").asInt().orElse(10),
+                root.get("fanout.bootstrap-servers").asString().asOptional(),
+                root.get("fanout.topic").asString().orElse("osproxy-writes"),
+                root.get("placements-url").asString().asOptional(),
+                root.get("placements-poll-seconds").asInt().orElse(10));
     }
 }
