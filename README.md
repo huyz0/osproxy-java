@@ -46,9 +46,10 @@ The port covers the Rust project's M1–M7 arc:
   (`x-osproxy-write-mode: async` → honest `202 {status, op_id}`).
 - **FIPS posture** (M6): the TLS listener is always pinned to the approved
   set (TLS 1.2/1.3, AES-GCM only, live-negotiation-tested), and
-  `osproxy.fips: true` refuses to boot unless a FIPS-validated JCE provider
-  (e.g. BouncyCastle FIPS) is installed — the validated module is a
-  deployment artifact, never bundled.
+  `osproxy.fips: true` engages the bundled BouncyCastle FIPS module (the
+  CMVP-validated BC-FIPS 2.1 line from Maven Central) in approved-only
+  mode, first in the provider order — failing boot loudly if the module's
+  self-tests refuse. Dormant unless enabled.
 - **OTLP export**: `osproxy.otlp-endpoint` turns on fire-and-forget span
   export (`osproxy-otlp`): one shape-only SERVER span per request POSTed to
   `{endpoint}/v1/traces`, bounded in-flight budget that sheds spans behind a
@@ -59,10 +60,9 @@ The port covers the Rust project's M1–M7 arc:
   polling the same URL converges without restarts.
 
 Everything is shape-only on the wire: error bodies, metrics, explain docs,
-spans and logs never carry tenant values. Still external by design: the
-FIPS-validated crypto module itself, a real Kafka producer behind the
-AckProducer seam, and a distributed placement store (the PlacementTable +
-MigrationControl seams are where one plugs in).
+spans and logs never carry tenant values. Still external by design: a real
+Kafka producer behind the AckProducer seam, and a distributed placement
+store (the PlacementTable + MigrationControl seams are where one plugs in).
 
 ## Build and test
 

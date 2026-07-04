@@ -30,7 +30,7 @@ public final class Main {
     /** Wires the reference stack and starts the server (tests call this too). */
     public static WebServer start(ProxyConfig cfg) {
         if (cfg.fips()) {
-            CryptoPosture.requireFipsProvider();
+            CryptoPosture.engageFips();
         }
         ClusterId cluster = new ClusterId("primary");
         OpenSearchSink sink = new OpenSearchSink(Map.of(cluster, cfg.upstream()));

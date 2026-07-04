@@ -30,19 +30,31 @@ class CryptoPostureTest {
         }
     }
 
+    /**
+     * Engaging BC-FIPS swaps the JVM's provider order globally, which
+     * poisons unrelated TLS tests sharing the JVM — so this runs in its own
+     * forked JVM via the dedicated {@code fipsTest} Gradle task.
+     */
     @Test
-    void fipsModeFailsLoudWithoutAValidatedProvider() {
-        // This dev box runs stock providers: the gate must refuse, naming the fix.
-        assertThat(CryptoPosture.installedFipsProvider()).isNull();
-        assertThatThrownBy(CryptoPosture::requireFipsProvider)
-                .isInstanceOf(CryptoPosture.FipsNotEngaged.class)
-                .hasMessageContaining("bc-fips");
-        assertThatThrownBy(() -> Main.start(new ProxyConfig(
-                        0, "http://localhost:59200", "shared", Map.of(),
-                        ProxyConfig.DEFAULT_MAX_BODY_BYTES, false,
-                        java.util.Optional.empty(), java.util.Optional.empty(),
-                        false, java.util.Optional.empty(), true)))
-                .isInstanceOf(CryptoPosture.FipsNotEngaged.class);
+    @org.junit.jupiter.api.Tag("fips")
+    void engagingFipsInstallsTheValidatedModuleInApprovedOnlyMode() {
+        CryptoPosture.engageFips();
+        assertThat(CryptoPosture.installedFipsProvider()).isEqualTo("BCFIPS");
+        assertThat(java.security.Security.getProviders()[0].getName()).isEqualTo("BCFIPS");
+        assertThat(org.bouncycastle.crypto.CryptoServicesRegistrar.isInApprovedOnlyMode())
+                .isTrue();
+        // Idempotent, and the crypto the proxy itself uses still resolves.
+        CryptoPosture.engageFips();
+        var codec = new HmacCursorCodec("0123456789abcdef-under-fips");
+        assertThat(codec.decode(codec.encode("c1", "acme", "id"))).isPresent();
+
+        // A fips-enabled server boots (the upstream is never dialed here).
+        var server = Main.start(new ProxyConfig(
+                0, "http://localhost:59200", "shared", Map.of(),
+                ProxyConfig.DEFAULT_MAX_BODY_BYTES, false,
+                java.util.Optional.empty(), java.util.Optional.empty(),
+                false, java.util.Optional.empty(), true));
+        server.stop();
     }
 
     @Test

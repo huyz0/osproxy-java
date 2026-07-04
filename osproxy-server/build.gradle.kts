@@ -26,6 +26,9 @@ dependencies {
     implementation(project(":osproxy-otlp"))
     implementation(project(":osproxy-rewrite"))
     implementation(libs.helidon.webserver)
+    // The FIPS 140-3 validated JCE module (CMVP cert on the BC-FIPS 2.1 line).
+    // Bundled but dormant: it is registered only when `osproxy.fips` is set.
+    implementation(libs.bc.fips)
     implementation(libs.jackson.databind)
 
     testImplementation(libs.junit.jupiter)
@@ -43,9 +46,27 @@ dependencies {
 // excluded from the default `test`/`check` run; opt in with
 // `./gradlew :osproxy-server:test -PincludeIntegration`.
 tasks.test {
-    if (!project.hasProperty("includeIntegration")) {
-        useJUnitPlatform {
-            excludeTags("integration")
+    useJUnitPlatform {
+        // fips engagement mutates the JVM's provider order; it runs in its
+        // own forked JVM (the fipsTest task), never with the main suite.
+        if (project.hasProperty("includeIntegration")) {
+            excludeTags("fips")
+        } else {
+            excludeTags("integration", "fips")
         }
     }
+}
+
+// The one fips-tagged test in a fresh JVM, part of `check`.
+val fipsTest = tasks.register<Test>("fipsTest") {
+    testClassesDirs = sourceSets.test.get().output.classesDirs
+    classpath = sourceSets.test.get().runtimeClasspath
+    useJUnitPlatform {
+        includeTags("fips")
+    }
+    forkEvery = 1
+}
+
+tasks.check {
+    dependsOn(fipsTest)
 }
