@@ -22,6 +22,7 @@ import java.util.Optional;
  * @param tls TLS ingress, when configured
  * @param cursorAffinityKey HMAC key sealing scroll/PIT cursor affinity;
  *     absent means the cursor endpoints are refused fail-closed
+ * @param logRequests emit one shape-only JSON line per request to stdout
  */
 public record ProxyConfig(
         int port,
@@ -31,7 +32,8 @@ public record ProxyConfig(
         long maxBodyBytes,
         boolean requireTlsForMutation,
         Optional<TlsSettings> tls,
-        Optional<String> cursorAffinityKey) {
+        Optional<String> cursorAffinityKey,
+        boolean logRequests) {
 
     /** PEM paths for the TLS listener; {@code clientCaPath} enables mTLS. */
     public record TlsSettings(String certPath, String keyPath, Optional<String> clientCaPath) {
@@ -53,7 +55,16 @@ public record ProxyConfig(
             int port, String upstream, String index, Map<String, String> tokens,
             long maxBodyBytes, boolean requireTlsForMutation, Optional<TlsSettings> tls) {
         this(port, upstream, index, tokens,
-                maxBodyBytes, requireTlsForMutation, tls, Optional.empty());
+                maxBodyBytes, requireTlsForMutation, tls, Optional.empty(), false);
+    }
+
+    /** The pre-logging form (tests): everything through the cursor key. */
+    public ProxyConfig(
+            int port, String upstream, String index, Map<String, String> tokens,
+            long maxBodyBytes, boolean requireTlsForMutation, Optional<TlsSettings> tls,
+            Optional<String> cursorAffinityKey) {
+        this(port, upstream, index, tokens,
+                maxBodyBytes, requireTlsForMutation, tls, cursorAffinityKey, false);
     }
 
     /** The default request-body cap (32 MiB), matching the Rust proxy. */
@@ -111,6 +122,7 @@ public record ProxyConfig(
                 root.get("max-body-bytes").asLong().orElse(DEFAULT_MAX_BODY_BYTES),
                 root.get("require-tls-for-mutation").asBoolean().orElse(false),
                 tls,
-                root.get("cursor-affinity-key").asString().asOptional());
+                root.get("cursor-affinity-key").asString().asOptional(),
+                root.get("log-requests").asBoolean().orElse(false));
     }
 }

@@ -90,4 +90,24 @@ class ProxyConfigTest {
                         0, "http://x", "i", Map.of(), 0, false, java.util.Optional.empty()))
                 .hasMessageContaining("max-body-bytes");
     }
+
+    @Test
+    void cursorKeyAndLogRequestsLoad() {
+        var cfg = ProxyConfig.load(config(Map.of(
+                "osproxy.upstream", "http://localhost:9200",
+                "osproxy.index", "shared",
+                "osproxy.cursor-affinity-key", "0123456789abcdef",
+                "osproxy.log-requests", "true")));
+        assertThat(cfg.cursorAffinityKey()).contains("0123456789abcdef");
+        assertThat(cfg.logRequests()).isTrue();
+        // The compat constructors default the additive knobs off.
+        var compat = new ProxyConfig(0, "http://x", "i", Map.of());
+        assertThat(compat.cursorAffinityKey()).isEmpty();
+        assertThat(compat.logRequests()).isFalse();
+        var precursor = new ProxyConfig(
+                0, "http://x", "i", Map.of(),
+                ProxyConfig.DEFAULT_MAX_BODY_BYTES, false, java.util.Optional.empty(),
+                java.util.Optional.of("0123456789abcdef"));
+        assertThat(precursor.logRequests()).isFalse();
+    }
 }

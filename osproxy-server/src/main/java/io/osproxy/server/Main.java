@@ -35,9 +35,12 @@ public final class Main {
                 new TenancyRouter(new ReferenceTenancy(cluster, new IndexName(cfg.index()))),
                 sink, sink,
                 cfg.cursorAffinityKey().map(HmacCursorCodec::new).map(c -> (io.osproxy.engine.CursorCodec) c));
+        Observability observability = new Observability(
+                512,
+                cfg.logRequests() ? java.util.Optional.of(System.out) : java.util.Optional.empty());
         AppHandler handler = new AppHandler(
                 pipeline, new BearerAuth(cfg.tokens()),
-                cfg.maxBodyBytes(), cfg.requireTlsForMutation());
+                cfg.maxBodyBytes(), cfg.requireTlsForMutation(), observability);
         var builder = WebServer.builder()
                 .port(cfg.port())
                 .routing(handler::route);

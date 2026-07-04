@@ -33,9 +33,11 @@ class ModuleDagTest {
                 .layer("sink").definedBy("io.osproxy.sink..")
                 .layer("engine").definedBy("io.osproxy.engine..")
                 .layer("config").definedBy("io.osproxy.config..")
+                .layer("observe").definedBy("io.osproxy.observe..")
                 .layer("server").definedBy("io.osproxy.server..")
                 .whereLayer("server").mayNotBeAccessedByAnyLayer()
                 .whereLayer("config").mayOnlyBeAccessedByLayers("server")
+                .whereLayer("observe").mayOnlyBeAccessedByLayers("server")
                 .whereLayer("engine").mayOnlyBeAccessedByLayers("server")
                 .whereLayer("sink").mayOnlyBeAccessedByLayers("engine", "server")
                 .whereLayer("tenancy").mayOnlyBeAccessedByLayers("engine", "server")
@@ -43,7 +45,8 @@ class ModuleDagTest {
                 .whereLayer("spi").mayOnlyBeAccessedByLayers(
                         "rewrite", "tenancy", "sink", "engine", "server")
                 .whereLayer("core").mayOnlyBeAccessedByLayers(
-                        "spi", "rewrite", "tenancy", "sink", "engine", "config", "server")
+                        "spi", "rewrite", "tenancy", "sink", "engine", "config",
+                        "observe", "server")
                 .check(classes);
     }
 }

@@ -24,10 +24,22 @@ import java.util.Optional;
  */
 public final class AppHandler {
 
+    /** The pre-auth introspection paths (shape-only, safe to leave on). */
+    public static final String METRICS_PATH = "/_osproxy/metrics";
+
+    /** Prefix of the explain lookup: {@code /_osproxy/explain/<request-id>}. */
+    public static final String EXPLAIN_PREFIX = "/_osproxy/explain/";
+
+    /** Echoed on every response so a client can look its request up. */
+    public static final String REQUEST_ID_HEADER = "x-osproxy-request-id";
+
+    private static final java.security.SecureRandom RANDOM = new java.security.SecureRandom();
+
     private final Pipeline pipeline;
     private final BearerAuth auth;
     private final long maxBodyBytes;
     private final boolean requireTlsForMutation;
+    private final Observability observability;
 
     public AppHandler(Pipeline pipeline, BearerAuth auth) {
         this(pipeline, auth, io.osproxy.config.ProxyConfig.DEFAULT_MAX_BODY_BYTES, false);
@@ -35,18 +47,62 @@ public final class AppHandler {
 
     public AppHandler(
             Pipeline pipeline, BearerAuth auth, long maxBodyBytes, boolean requireTlsForMutation) {
+        this(pipeline, auth, maxBodyBytes, requireTlsForMutation,
+                new Observability(512, Optional.empty()));
+    }
+
+    public AppHandler(
+            Pipeline pipeline, BearerAuth auth, long maxBodyBytes,
+            boolean requireTlsForMutation, Observability observability) {
         this.pipeline = pipeline;
         this.auth = auth;
         this.maxBodyBytes = maxBodyBytes;
         this.requireTlsForMutation = requireTlsForMutation;
+        this.observability = observability;
     }
 
     /** Installs the catch-all route. */
     public void route(HttpRouting.Builder routing) {
-        routing.any(this::handle);
+        routing.any(this::handleTraced);
+    }
+
+    /** Binds the request's trace context, then handles. */
+    private void handleTraced(ServerRequest req, ServerResponse res) {
+        io.osproxy.core.TraceContext trace = req.headers()
+                .first(HeaderNames.create("traceparent"))
+                .flatMap(io.osproxy.core.TraceContext::parse)
+                .map(incoming -> incoming.child(randomBytes(8)))
+                .orElseGet(() -> io.osproxy.core.TraceContext.mint(
+                        randomBytes(16), randomBytes(8)));
+        ScopedValue.where(io.osproxy.core.Tracing.CURRENT, trace)
+                .run(() -> handle(req, res));
+    }
+
+    private static byte[] randomBytes(int n) {
+        byte[] bytes = new byte[n];
+        RANDOM.nextBytes(bytes);
+        return bytes;
     }
 
     private void handle(ServerRequest req, ServerResponse res) {
+        // Introspection short-circuits before auth: shape-only surfaces that
+        // stay readable even when the data plane's credentials are broken.
+        String rawPath = req.path().rawPath();
+        if (rawPath.equals(METRICS_PATH)) {
+            res.status(Status.OK_200)
+                    .header(HeaderNames.CONTENT_TYPE, "application/json")
+                    .send(observability.metrics().toJson());
+            return;
+        }
+        if (rawPath.startsWith(EXPLAIN_PREFIX)) {
+            String id = rawPath.substring(EXPLAIN_PREFIX.length());
+            var doc = observability.explainStore().lookup(id);
+            res.status(doc.isPresent() ? Status.OK_200 : Status.NOT_FOUND_404)
+                    .header(HeaderNames.CONTENT_TYPE, "application/json")
+                    .send(doc.map(io.osproxy.observe.ExplainDoc::toJson)
+                            .orElse("{\"error\":\"unknown_request_id\"}"));
+            return;
+        }
         Optional<RequestCtx.HttpMethod> method = method(req.prologue().method().text());
         if (method.isEmpty()) {
             send(res, PipelineResponse.error(ErrorCode.UNSUPPORTED_ENDPOINT));
@@ -94,7 +150,41 @@ public final class AppHandler {
                 classified.logicalIndex(), classified.docId(),
                 headers, body, principal.get(),
                 req.query().rawValue());
-        send(res, pipeline.handle(ctx));
+
+        long started = System.nanoTime();
+        PipelineResponse out = pipeline.handle(ctx);
+        record(ctx, res, out, System.nanoTime() - started);
+        send(res, out);
+    }
+
+    /** Tallies the completed request and echoes its id. */
+    private void record(
+            RequestCtx ctx, ServerResponse res, PipelineResponse out, long durationNanos) {
+        String requestId = java.util.HexFormat.of().formatHex(randomBytes(8));
+        res.header(HeaderNames.create(REQUEST_ID_HEADER), requestId);
+        Optional<String> errorCode = out.status() >= 400
+                ? extractErrorCode(out.body())
+                : Optional.empty();
+        observability.record(new io.osproxy.observe.ExplainDoc(
+                requestId,
+                io.osproxy.core.Tracing.CURRENT.get().traceId(),
+                ctx.endpoint(),
+                ctx.method().name(),
+                out.status(),
+                errorCode,
+                durationNanos));
+    }
+
+    /** Pulls the wire code out of a shape-only error body. */
+    private static Optional<String> extractErrorCode(byte[] body) {
+        String text = new String(body, java.nio.charset.StandardCharsets.UTF_8);
+        int at = text.indexOf("\"error\":\"");
+        if (at < 0) {
+            return Optional.empty();
+        }
+        int start = at + 9;
+        int end = text.indexOf('"', start);
+        return end > start ? Optional.of(text.substring(start, end)) : Optional.empty();
     }
 
     private static void send(ServerResponse res, PipelineResponse out) {
