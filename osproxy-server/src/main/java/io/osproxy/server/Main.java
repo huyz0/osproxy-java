@@ -59,11 +59,15 @@ public final class Main {
                             reference, table, new io.osproxy.tenancy.MigrationControl(table));
                 })
                 .orElse(reference);
+        // Tenant-agnostic passthrough: set only when both the cluster and its
+        // endpoint are configured (fail-closed default is full tenancy).
+        var passthrough = cfg.passthroughCluster().map(clusterName -> new io.osproxy.engine.PassthroughPolicy(
+                new ClusterId(clusterName), cfg.passthroughEndpoint(), cfg.passthroughIndices()));
         Pipeline pipeline = new Pipeline(
                 new TenancyRouter(tenancy),
                 sink, sink,
                 cfg.cursorAffinityKey().map(HmacCursorCodec::new).map(c -> (io.osproxy.engine.CursorCodec) c),
-                asyncSink);
+                asyncSink, passthrough);
         var requestLog = cfg.logRequests()
                 ? java.util.Optional.of(System.out) : java.util.Optional.<java.io.PrintStream>empty();
         var baseline = cfg.logRequests()
@@ -78,9 +82,15 @@ public final class Main {
                 .orElseGet(() -> new Observability(512, requestLog));
         cfg.otlpEndpoint().ifPresent(endpoint -> observability.withExporter(
                 new io.osproxy.otlp.OtlpHttpExporter(endpoint, cfg.serviceName())));
+        if (cfg.logDiagnosticCaptures()) {
+            observability.withDiagnosticSink(new StdoutDiagnosticSink());
+        }
         AppHandler handler = new AppHandler(
                 pipeline, new BearerAuth(cfg.tokens()),
-                cfg.maxBodyBytes(), cfg.requireTlsForMutation(), observability);
+                cfg.maxBodyBytes(), cfg.requireTlsForMutation(), observability)
+                .withDebugEndpoints(cfg.debugEndpoints())
+                .withForwardPolicy(new ForwardPolicy(
+                        cfg.headerForwardingEnabled(), cfg.headerForwardingDeny()));
         cfg.directiveAdminToken().ifPresent(handler::withAdminToken);
         var builder = WebServer.builder()
                 .port(cfg.port())

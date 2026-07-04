@@ -36,13 +36,14 @@ class BreakGlassBufferTest {
 
     @Test
     void directiveSetReportsWhetherAnyMatchingDirectiveWantsRingBuffer() {
-        var attrs = new Directive.RequestAttrs("acme", Optional.of("orders"), EndpointKind.SEARCH);
+        var attrs = new Directive.RequestAttrs(
+                "acme", Optional.of("orders"), EndpointKind.SEARCH, "user-1");
         var withRingBuffer = new Directive(
                 "d1", DiagLevel.SHAPE, Optional.of("acme"), Optional.empty(), Optional.empty(),
-                1000, true, 100);
+                Optional.empty(), 1000, true, 100);
         var withoutRingBuffer = new Directive(
                 "d2", DiagLevel.SHAPE, Optional.of("acme"), Optional.empty(), Optional.empty(),
-                1000, false, 100);
+                Optional.empty(), 1000, false, 100);
 
         var set = new DirectiveSet(DiagLevel.OFF, List.of(withoutRingBuffer, withRingBuffer));
         assertThat(set.wantsRingBuffer(attrs, "r", 50)).isTrue();

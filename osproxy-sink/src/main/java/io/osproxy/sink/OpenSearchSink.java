@@ -197,6 +197,36 @@ public final class OpenSearchSink implements Sink, Reader {
                 .submit(body.length == 0 ? "{}".getBytes(StandardCharsets.UTF_8) : body));
     }
 
+    @Override
+    public Response forward(
+            Target target, io.osproxy.spi.RequestCtx.HttpMethod method, String path,
+            String query, byte[] body, java.util.List<Map.Entry<String, String>> extraHeaders)
+            throws SinkException {
+        WebClient client = client(target);
+        io.helidon.http.Method helidonMethod = switch (method) {
+            case GET -> io.helidon.http.Method.GET;
+            case PUT -> io.helidon.http.Method.PUT;
+            case POST -> io.helidon.http.Method.POST;
+            case DELETE -> io.helidon.http.Method.DELETE;
+            case HEAD -> io.helidon.http.Method.HEAD;
+        };
+        return request(target, () -> {
+            var req = traced(client.method(helidonMethod)).path(path);
+            if (query != null && !query.isEmpty()) {
+                for (String pair : query.split("&")) {
+                    int eq = pair.indexOf('=');
+                    if (eq >= 0) {
+                        req = req.queryParam(pair.substring(0, eq), pair.substring(eq + 1));
+                    }
+                }
+            }
+            for (Map.Entry<String, String> header : extraHeaders) {
+                req = req.header(io.helidon.http.HeaderNames.create(header.getKey()), header.getValue());
+            }
+            return body.length == 0 ? req.request() : req.submit(body);
+        });
+    }
+
     private interface Call {
         HttpClientResponse invoke() throws SinkException;
     }

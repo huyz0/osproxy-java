@@ -23,6 +23,30 @@ class ProxyConfigTest {
                 "osproxy.tokens.secret-g", "globex")));
         assertThat(cfg.port()).isEqualTo(9200);
         assertThat(cfg.tokens()).containsEntry("secret-a", "acme").hasSize(2);
+        assertThat(cfg.debugEndpoints()).isTrue();
+    }
+
+    @Test
+    void debugEndpointsCanBeDisabled() {
+        var cfg = ProxyConfig.load(config(Map.of(
+                "osproxy.upstream", "http://localhost:9200",
+                "osproxy.index", "shared",
+                "osproxy.debug-endpoints", "false")));
+        assertThat(cfg.debugEndpoints()).isFalse();
+    }
+
+    @Test
+    void logDiagnosticCapturesDefaultsOffAndCanBeEnabled() {
+        var defaults = ProxyConfig.load(config(Map.of(
+                "osproxy.upstream", "http://localhost:9200",
+                "osproxy.index", "shared")));
+        assertThat(defaults.logDiagnosticCaptures()).isFalse();
+
+        var enabled = ProxyConfig.load(config(Map.of(
+                "osproxy.upstream", "http://localhost:9200",
+                "osproxy.index", "shared",
+                "osproxy.log-diagnostic-captures", "true")));
+        assertThat(enabled.logDiagnosticCaptures()).isTrue();
     }
 
     @Test
@@ -109,5 +133,44 @@ class ProxyConfigTest {
                 ProxyConfig.DEFAULT_MAX_BODY_BYTES, false, java.util.Optional.empty(),
                 java.util.Optional.of("0123456789abcdef"));
         assertThat(precursor.logRequests()).isFalse();
+    }
+
+    @Test
+    void passthroughRequiresBothClusterAndEndpointOrNeither() {
+        assertThat(new ProxyConfig(0, "http://x", "i", Map.of()).passthroughCluster()).isEmpty();
+
+        assertThatThrownBy(() -> ProxyConfig.load(config(Map.of(
+                        "osproxy.upstream", "http://localhost:9200",
+                        "osproxy.index", "shared",
+                        "osproxy.passthrough-cluster", "legacy"))))
+                .isInstanceOf(ProxyConfig.ConfigException.class)
+                .hasMessageContaining("passthrough");
+
+        var cfg = ProxyConfig.load(config(Map.of(
+                "osproxy.upstream", "http://localhost:9200",
+                "osproxy.index", "shared",
+                "osproxy.passthrough-cluster", "legacy",
+                "osproxy.passthrough-endpoint", "http://legacy:9200",
+                "osproxy.passthrough-indices", "legacy-, raw_")));
+        assertThat(cfg.passthroughCluster()).contains("legacy");
+        assertThat(cfg.passthroughEndpoint()).contains("http://legacy:9200");
+        assertThat(cfg.passthroughIndices()).containsExactly("legacy-", "raw_");
+    }
+
+    @Test
+    void headerForwardingDefaultsOnAndCanBeConfigured() {
+        var defaults = ProxyConfig.load(config(Map.of(
+                "osproxy.upstream", "http://localhost:9200",
+                "osproxy.index", "shared")));
+        assertThat(defaults.headerForwardingEnabled()).isTrue();
+        assertThat(defaults.headerForwardingDeny()).isEmpty();
+
+        var configured = ProxyConfig.load(config(Map.of(
+                "osproxy.upstream", "http://localhost:9200",
+                "osproxy.index", "shared",
+                "osproxy.header-forwarding.enabled", "false",
+                "osproxy.header-forwarding.deny", "authorization, x-secret")));
+        assertThat(configured.headerForwardingEnabled()).isFalse();
+        assertThat(configured.headerForwardingDeny()).containsExactly("authorization", "x-secret");
     }
 }

@@ -37,6 +37,7 @@ public final class Pipeline {
     private final MultiOps multiOps;
     private final Cursors cursors;
     private final Optional<AsyncWrites.AsyncWriteSink> asyncSink;
+    private final Optional<PassthroughPolicy> passthrough;
 
     public Pipeline(TenancyRouter router, Sink sink, Reader reader) {
         this(router, sink, reader, Optional.empty(), Optional.empty());
@@ -53,12 +54,25 @@ public final class Pipeline {
             TenancyRouter router, Sink sink, Reader reader,
             Optional<CursorCodec> cursorCodec,
             Optional<AsyncWrites.AsyncWriteSink> asyncSink) {
+        this(router, sink, reader, cursorCodec, asyncSink, Optional.empty());
+    }
+
+    /**
+     * With a passthrough policy: requests matching it (by logical index) skip
+     * tenancy entirely and forward verbatim to the configured cluster.
+     */
+    public Pipeline(
+            TenancyRouter router, Sink sink, Reader reader,
+            Optional<CursorCodec> cursorCodec,
+            Optional<AsyncWrites.AsyncWriteSink> asyncSink,
+            Optional<PassthroughPolicy> passthrough) {
         this.router = router;
         this.sink = sink;
         this.reader = reader;
         this.multiOps = new MultiOps(this);
         this.cursors = new Cursors(this, cursorCodec);
         this.asyncSink = asyncSink;
+        this.passthrough = passthrough;
     }
 
     TenancyRouter router() {
@@ -76,6 +90,12 @@ public final class Pipeline {
     /** Handles one classified, authenticated request. */
     public PipelineResponse handle(RequestCtx ctx) {
         try {
+            // Tenant-agnostic passthrough short-circuits dispatch for the
+            // requests it matches (by logical index); unmatched requests fall
+            // through to tenancy below (fail-closed).
+            if (passthrough.isPresent() && passthrough.get().matches(ctx)) {
+                return forward(ctx, passthrough.get());
+            }
             if (AsyncWrites.wantsAsync(ctx)) {
                 // Refuse-don't-lie: async mode exists only for single-doc
                 // writes, and only when a durable sink is wired.
@@ -109,6 +129,23 @@ public final class Pipeline {
         } catch (EngineException e) {
             return PipelineResponse.error(e.errorCode());
         }
+    }
+
+    /**
+     * Forwards {@code ctx} verbatim to the passthrough cluster and returns
+     * the raw upstream response, unshaped. Reuses the reader's generic
+     * verbatim-forward primitive; carries the client's forwarded header set
+     * (bound per-request by the ingress) so a sidecar deployment's routing
+     * hints and credentials ride through to the upstream.
+     */
+    private PipelineResponse forward(RequestCtx ctx, PassthroughPolicy policy)
+            throws SinkException {
+        io.osproxy.core.Target target = new io.osproxy.core.Target(
+                policy.cluster(), new io.osproxy.core.IndexName("passthrough"), policy.endpoint());
+        Reader.Response outcome = reader.forward(
+                target, ctx.method(), ctx.path(), ctx.rawQuery(), ctx.body(),
+                io.osproxy.core.ForwardHeaders.currentOrEmpty());
+        return new PipelineResponse(outcome.status(), outcome.body());
     }
 
     private PipelineResponse ingestDoc(RequestCtx ctx)

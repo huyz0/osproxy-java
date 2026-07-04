@@ -48,6 +48,8 @@ public final class AppHandler {
     private final Observability observability;
     private Optional<String> adminToken = Optional.empty();
     private Optional<io.osproxy.capture.Capture> capture = Optional.empty();
+    private boolean debugEndpoints = true;
+    private ForwardPolicy forwardPolicy = ForwardPolicy.passAll();
 
     public AppHandler(Pipeline pipeline, BearerAuth auth) {
         this(pipeline, auth, io.osproxy.config.ProxyConfig.DEFAULT_MAX_BODY_BYTES, false);
@@ -81,12 +83,38 @@ public final class AppHandler {
         return this;
     }
 
+    /**
+     * Toggles the shape-only {@code /_osproxy/explain} and
+     * {@code /_osproxy/breakglass} surfaces (default: on). Off in production
+     * so operational metadata is not exposed unauthenticated; disabled
+     * requests report {@code not_enabled} rather than 404, to distinguish
+     * "turned off here" from "no such route". {@code /_osproxy/metrics}
+     * always stays on regardless of this switch.
+     */
+    public AppHandler withDebugEndpoints(boolean enabled) {
+        this.debugEndpoints = enabled;
+        return this;
+    }
+
+    /**
+     * Sets the client-header-forwarding policy (default: {@link
+     * ForwardPolicy#passAll()}, the sidecar-trust default — every client
+     * header rides through to the upstream except the mandatory
+     * hop-by-hop/framing set). Only takes effect on requests a passthrough
+     * policy forwards verbatim; the tenancy-shaped endpoints do not yet
+     * thread the forwarded set onto their own upstream calls.
+     */
+    public AppHandler withForwardPolicy(ForwardPolicy policy) {
+        this.forwardPolicy = policy;
+        return this;
+    }
+
     /** Installs the catch-all route. */
     public void route(HttpRouting.Builder routing) {
         routing.any(this::handleTraced);
     }
 
-    /** Binds the request's trace context, then handles. */
+    /** Binds the request's trace context and forwarded-header set, then handles. */
     private void handleTraced(ServerRequest req, ServerResponse res) {
         io.osproxy.core.TraceContext trace = req.headers()
                 .first(HeaderNames.create("traceparent"))
@@ -94,7 +122,11 @@ public final class AppHandler {
                 .map(incoming -> incoming.child(randomBytes(8)))
                 .orElseGet(() -> io.osproxy.core.TraceContext.mint(
                         randomBytes(16), randomBytes(8)));
+        List<Map.Entry<String, String>> rawHeaders = new ArrayList<>();
+        req.headers().forEach(h -> rawHeaders.add(Map.entry(h.name(), h.values())));
+        List<Map.Entry<String, String>> forward = forwardPolicy.forwardSet(rawHeaders);
         ScopedValue.where(io.osproxy.core.Tracing.CURRENT, trace)
+                .where(io.osproxy.core.ForwardHeaders.CURRENT, forward)
                 .run(() -> handle(req, res));
     }
 
@@ -119,6 +151,10 @@ public final class AppHandler {
             return;
         }
         if (rawPath.equals(BREAKGLASS_PATH)) {
+            if (!debugEndpoints) {
+                sendNotEnabled(res);
+                return;
+            }
             List<String> tape = observability.breakGlass().snapshot();
             res.status(Status.OK_200)
                     .header(HeaderNames.CONTENT_TYPE, "application/json")
@@ -126,6 +162,10 @@ public final class AppHandler {
             return;
         }
         if (rawPath.startsWith(EXPLAIN_PREFIX)) {
+            if (!debugEndpoints) {
+                sendNotEnabled(res);
+                return;
+            }
             String id = rawPath.substring(EXPLAIN_PREFIX.length());
             var doc = observability.explainStore().lookup(id);
             res.status(doc.isPresent() ? Status.OK_200 : Status.NOT_FOUND_404)
@@ -296,7 +336,8 @@ public final class AppHandler {
         observability.record(doc, new io.osproxy.observe.Directive.RequestAttrs(
                 ctx.principal().attribute("tenant").orElse(""),
                 ctx.logicalIndex(),
-                ctx.endpoint()));
+                ctx.endpoint(),
+                ctx.principal().id()));
         if (observability.exporter().enabled()) {
             observability.exporter().export(
                     doc,
@@ -315,6 +356,12 @@ public final class AppHandler {
         int start = at + 9;
         int end = text.indexOf('"', start);
         return end > start ? Optional.of(text.substring(start, end)) : Optional.empty();
+    }
+
+    private static void sendNotEnabled(ServerResponse res) {
+        res.status(Status.NOT_FOUND_404)
+                .header(HeaderNames.CONTENT_TYPE, "application/json")
+                .send("{\"error\":\"not_enabled\"}");
     }
 
     private static void send(ServerResponse res, PipelineResponse out) {

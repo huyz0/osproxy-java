@@ -5,6 +5,7 @@ import io.osproxy.core.SystemClock;
 import io.osproxy.observe.BreakGlassBuffer;
 import io.osproxy.observe.DiagLevel;
 import io.osproxy.observe.Directive;
+import io.osproxy.observe.DiagnosticSink;
 import io.osproxy.observe.DirectiveSet;
 import io.osproxy.observe.ExplainDoc;
 import io.osproxy.observe.ExplainStore;
@@ -27,6 +28,7 @@ public final class Observability {
     private final DirectiveSet.Store directives;
     private final Clock clock;
     private io.osproxy.observe.SpanExporter exporter = io.osproxy.observe.SpanExporter.NOOP;
+    private DiagnosticSink diagnosticSink = DiagnosticSink.NOOP;
 
     public Observability(int explainCapacity, Optional<PrintStream> requestLog) {
         this(explainCapacity, requestLog,
@@ -47,6 +49,15 @@ public final class Observability {
     /** Enables span export (default: off, all export cost skipped). */
     public Observability withExporter(io.osproxy.observe.SpanExporter exporter) {
         this.exporter = exporter;
+        return this;
+    }
+
+    /**
+     * Enables off-instance delivery of directive-selected captures (default:
+     * {@link DiagnosticSink#NOOP}, local break-glass ring only).
+     */
+    public Observability withDiagnosticSink(DiagnosticSink diagnosticSink) {
+        this.diagnosticSink = diagnosticSink;
         return this;
     }
 
@@ -78,9 +89,15 @@ public final class Observability {
         }
         // Break-glass: capture the explanation when a ring_buffer directive
         // selected this request. Off by default, so this stays empty until an
-        // operator flips it on.
+        // operator flips it on. The doc is built once and both retained in the
+        // local ring and pushed to the fleet diagnostic sink (keyed by
+        // trace_id, already on the doc), so it is reachable on any instance.
         if (snapshot.wantsRingBuffer(attrs, doc.requestId(), now)) {
-            breakGlass.capture(doc.toJson());
+            String json = doc.toJson();
+            if (diagnosticSink.enabled()) {
+                diagnosticSink.emit(json);
+            }
+            breakGlass.capture(json);
         }
     }
 

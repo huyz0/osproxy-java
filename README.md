@@ -67,7 +67,25 @@ The port covers the Rust project's M1–M7 arc:
   etcd gateway, a config service, an object store) with fail-closed
   decoding and keep-last-good semantics — every instance polling the same
   URL converges without restarts. Placement changes bump the partition's
-  epoch only on a real move, engaging the stale-write gate.
+  epoch only on a real move, engaging the stale-write gate. A directive can
+  also target one authenticated `principal`, not just tenant/index/endpoint.
+- **Diagnostic sink**: `osproxy.log-diagnostic-captures` pushes each
+  `ring_buffer`-selected explain doc to stdout as a tagged JSON line too, so
+  a log-collector-backed aggregator can see fleet-wide captures, not just
+  the instance that happened to handle the request (the break-glass ring
+  stays local per-instance either way).
+- **`/_osproxy/explain` and `/_osproxy/breakglass` kill-switch**:
+  `osproxy.debug-endpoints` (default true) turns both off in production;
+  disabled requests report `not_enabled` rather than 404.
+  `/_osproxy/metrics` always stays on regardless.
+- **Tenant-agnostic passthrough**: `osproxy.passthrough-cluster` +
+  `osproxy.passthrough-endpoint` (+ optional `osproxy.passthrough-indices`,
+  a comma-separated prefix list) forward matching requests verbatim to one
+  cluster, skipping tenancy entirely — the composable migration shape:
+  legacy indices pass through, onboarded ones stay tenant-isolated, fail-closed
+  on a non-match. `osproxy.header-forwarding.enabled` (default true) and
+  `.deny` control which client headers ride along on a passthrough forward
+  (mandatory hop-by-hop/framing headers are always stripped).
 
 Everything is shape-only on the wire: error bodies, metrics, explain docs,
 spans and logs never carry tenant values.

@@ -2,6 +2,7 @@ package io.osproxy.config;
 
 import io.helidon.config.Config;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -37,6 +38,26 @@ import java.util.Optional;
  * @param placementsUrl HTTP source polled for fleet placements; absent
  *     means every partition stays on the reference shared index
  * @param placementsPollSeconds the poll interval for {@code placementsUrl}
+ * @param debugEndpoints serve {@code /_osproxy/explain} and
+ *     {@code /_osproxy/breakglass} (default true); off in production so
+ *     operational metadata isn't exposed unauthenticated. {@code /_osproxy/metrics}
+ *     always stays on regardless.
+ * @param logDiagnosticCaptures also push each ring_buffer-selected explain doc
+ *     to stdout as a tagged JSON line (the fleet-coherent counterpart of the
+ *     local break-glass ring, for a log-collector-backed aggregator)
+ * @param passthroughCluster the cluster a tenant-agnostic passthrough request
+ *     forwards to; must be set together with {@code passthroughEndpoint} or
+ *     neither (absent means passthrough is off, every request is tenanted)
+ * @param passthroughEndpoint the passthrough cluster's base URL
+ * @param passthroughIndices logical-index prefixes that route verbatim;
+ *     empty means every request passes through (whole-instance transparent
+ *     proxy) once a passthrough cluster/endpoint is configured
+ * @param headerForwardingEnabled forward client headers to the upstream
+ *     (default true, the sidecar-trust default); {@code false} restores the
+ *     minimal behavior (only proxy-managed headers reach the cluster)
+ * @param headerForwardingDeny extra client headers to drop from the
+ *     forwarded set (case-insensitive), on top of the mandatory
+ *     hop-by-hop/framing set
  */
 public record ProxyConfig(
         int port,
@@ -57,7 +78,14 @@ public record ProxyConfig(
         Optional<String> fanoutBootstrapServers,
         String fanoutTopic,
         Optional<String> placementsUrl,
-        int placementsPollSeconds) {
+        int placementsPollSeconds,
+        boolean debugEndpoints,
+        boolean logDiagnosticCaptures,
+        Optional<String> passthroughCluster,
+        Optional<String> passthroughEndpoint,
+        List<String> passthroughIndices,
+        boolean headerForwardingEnabled,
+        List<String> headerForwardingDeny) {
 
     /** PEM paths for the TLS listener; {@code clientCaPath} enables mTLS. */
     public record TlsSettings(String certPath, String keyPath, Optional<String> clientCaPath) {
@@ -144,6 +172,42 @@ public record ProxyConfig(
                 Optional.empty(), 10);
     }
 
+    /** The pre-debug-endpoints form (tests): debug endpoints default on. */
+    public ProxyConfig(
+            int port, String upstream, String index, Map<String, String> tokens,
+            long maxBodyBytes, boolean requireTlsForMutation, Optional<TlsSettings> tls,
+            Optional<String> cursorAffinityKey, boolean logRequests,
+            Optional<String> directiveAdminToken, boolean fips,
+            Optional<String> otlpEndpoint, String serviceName,
+            Optional<String> directivesUrl, int directivesPollSeconds,
+            Optional<String> fanoutBootstrapServers, String fanoutTopic,
+            Optional<String> placementsUrl, int placementsPollSeconds) {
+        this(port, upstream, index, tokens,
+                maxBodyBytes, requireTlsForMutation, tls, cursorAffinityKey, logRequests,
+                directiveAdminToken, fips, otlpEndpoint, serviceName,
+                directivesUrl, directivesPollSeconds, fanoutBootstrapServers, fanoutTopic,
+                placementsUrl, placementsPollSeconds, true, false);
+    }
+
+    /** The pre-passthrough form (tests): passthrough off, header forwarding on. */
+    public ProxyConfig(
+            int port, String upstream, String index, Map<String, String> tokens,
+            long maxBodyBytes, boolean requireTlsForMutation, Optional<TlsSettings> tls,
+            Optional<String> cursorAffinityKey, boolean logRequests,
+            Optional<String> directiveAdminToken, boolean fips,
+            Optional<String> otlpEndpoint, String serviceName,
+            Optional<String> directivesUrl, int directivesPollSeconds,
+            Optional<String> fanoutBootstrapServers, String fanoutTopic,
+            Optional<String> placementsUrl, int placementsPollSeconds,
+            boolean debugEndpoints, boolean logDiagnosticCaptures) {
+        this(port, upstream, index, tokens,
+                maxBodyBytes, requireTlsForMutation, tls, cursorAffinityKey, logRequests,
+                directiveAdminToken, fips, otlpEndpoint, serviceName,
+                directivesUrl, directivesPollSeconds, fanoutBootstrapServers, fanoutTopic,
+                placementsUrl, placementsPollSeconds, debugEndpoints, logDiagnosticCaptures,
+                Optional.empty(), Optional.empty(), List.of(), true, List.of());
+    }
+
     /** The default request-body cap (32 MiB), matching the Rust proxy. */
     public static final long DEFAULT_MAX_BODY_BYTES = 32L * 1024 * 1024;
 
@@ -164,7 +228,13 @@ public record ProxyConfig(
             throw new ConfigException(
                     "require-tls-for-mutation needs a tls listener (every mutation would 403)");
         }
+        if (passthroughCluster.isPresent() != passthroughEndpoint.isPresent()) {
+            throw new ConfigException(
+                    "set both passthrough-cluster and passthrough-endpoint, or neither");
+        }
         tokens = Map.copyOf(tokens);
+        passthroughIndices = List.copyOf(passthroughIndices);
+        headerForwardingDeny = List.copyOf(headerForwardingDeny);
     }
 
     /** A config that failed validation; the message says which key and why. */
@@ -210,6 +280,22 @@ public record ProxyConfig(
                 root.get("fanout.bootstrap-servers").asString().asOptional(),
                 root.get("fanout.topic").asString().orElse("osproxy-writes"),
                 root.get("placements-url").asString().asOptional(),
-                root.get("placements-poll-seconds").asInt().orElse(10));
+                root.get("placements-poll-seconds").asInt().orElse(10),
+                root.get("debug-endpoints").asBoolean().orElse(true),
+                root.get("log-diagnostic-captures").asBoolean().orElse(false),
+                root.get("passthrough-cluster").asString().asOptional(),
+                root.get("passthrough-endpoint").asString().asOptional(),
+                csv(root.get("passthrough-indices").asString().asOptional()),
+                root.get("header-forwarding.enabled").asBoolean().orElse(true),
+                csv(root.get("header-forwarding.deny").asString().asOptional()));
+    }
+
+    /** A comma-separated list value, trimmed and empties dropped ({@code []} when unset). */
+    private static List<String> csv(Optional<String> value) {
+        return value.map(v -> java.util.Arrays.stream(v.split(","))
+                        .map(String::strip)
+                        .filter(s -> !s.isEmpty())
+                        .toList())
+                .orElse(List.of());
     }
 }

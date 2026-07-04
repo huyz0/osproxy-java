@@ -11,12 +11,13 @@ import org.junit.jupiter.api.Test;
 class DirectiveTest {
 
     private static final Directive.RequestAttrs ACME_SEARCH =
-            new Directive.RequestAttrs("acme", Optional.of("orders"), EndpointKind.SEARCH);
+            new Directive.RequestAttrs("acme", Optional.of("orders"), EndpointKind.SEARCH, "user-1");
 
     private static Directive directive(
             DiagLevel level, Optional<String> tenant, int perMille, long expiresAt) {
         return new Directive(
-                "d1", level, tenant, Optional.empty(), Optional.empty(), perMille, false, expiresAt);
+                "d1", level, tenant, Optional.empty(), Optional.empty(), Optional.empty(),
+                perMille, false, expiresAt);
     }
 
     @Test
@@ -24,7 +25,8 @@ class DirectiveTest {
         var d = directive(DiagLevel.VERBOSE, Optional.of("acme"), 1000, 100);
         assertThat(d.matches(ACME_SEARCH, "r1", 50)).isTrue();
         assertThat(d.matches(ACME_SEARCH, "r1", 100)).isFalse(); // expired
-        var other = new Directive.RequestAttrs("globex", Optional.empty(), EndpointKind.SEARCH);
+        var other = new Directive.RequestAttrs(
+                "globex", Optional.empty(), EndpointKind.SEARCH, "user-1");
         assertThat(d.matches(other, "r1", 50)).isFalse();
 
         // Deterministic sampling: same request id, same verdict, every time.
@@ -42,12 +44,24 @@ class DirectiveTest {
     void endpointAndIndexTargeting() {
         var byEndpoint = new Directive(
                 "d", DiagLevel.OFF, Optional.empty(), Optional.empty(),
-                Optional.of(EndpointKind.INGEST_BULK), 1000, false, 100);
+                Optional.of(EndpointKind.INGEST_BULK), Optional.empty(), 1000, false, 100);
         assertThat(byEndpoint.matches(ACME_SEARCH, "r", 50)).isFalse();
         var byIndex = new Directive(
                 "d", DiagLevel.OFF, Optional.empty(), Optional.of("other"),
-                Optional.empty(), 1000, false, 100);
+                Optional.empty(), Optional.empty(), 1000, false, 100);
         assertThat(byIndex.matches(ACME_SEARCH, "r", 50)).isFalse();
+    }
+
+    @Test
+    void principalTargeting() {
+        var byPrincipal = new Directive(
+                "d", DiagLevel.OFF, Optional.empty(), Optional.empty(), Optional.empty(),
+                Optional.of("user-1"), 1000, false, 100);
+        assertThat(byPrincipal.matches(ACME_SEARCH, "r", 50)).isTrue();
+        var otherPrincipal = new Directive(
+                "d", DiagLevel.OFF, Optional.empty(), Optional.empty(), Optional.empty(),
+                Optional.of("user-2"), 1000, false, 100);
+        assertThat(otherPrincipal.matches(ACME_SEARCH, "r", 50)).isFalse();
     }
 
     @Test
@@ -64,7 +78,8 @@ class DirectiveTest {
 
         // Nothing matches: the baseline stands.
         assertThat(silenced.evaluate(
-                        new Directive.RequestAttrs("globex", Optional.empty(), EndpointKind.SEARCH),
+                        new Directive.RequestAttrs(
+                                "globex", Optional.empty(), EndpointKind.SEARCH, "user-1"),
                         "r", 50))
                 .isEqualTo(DiagLevel.SHAPE);
         // Everything expired: the baseline stands.
@@ -87,7 +102,7 @@ class DirectiveTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new Directive(
                         "", DiagLevel.OFF, Optional.empty(), Optional.empty(),
-                        Optional.empty(), 1, false, 1))
+                        Optional.empty(), Optional.empty(), 1, false, 1))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThat(DiagLevel.fromWireName("verbose")).isEqualTo(DiagLevel.VERBOSE);
         assertThat(DiagLevel.fromWireName("nope")).isNull();

@@ -25,7 +25,7 @@ import org.junit.jupiter.api.Test;
  */
 class OpenSearchSinkLoopbackTest {
 
-    private record Seen(String method, String path, String body) {}
+    private record Seen(String method, String path, String body, String forwardedTestHeader) {}
 
     private static final ConcurrentLinkedQueue<Seen> SEEN = new ConcurrentLinkedQueue<>();
     private static WebServer server;
@@ -55,7 +55,9 @@ class OpenSearchSinkLoopbackTest {
             SEEN.add(new Seen(
                     req.prologue().method().text(),
                     req.path().rawPath() + (query.isEmpty() ? "" : "?" + query),
-                    req.content().hasEntity() ? req.content().as(String.class) : ""));
+                    req.content().hasEntity() ? req.content().as(String.class) : "",
+                    req.headers().first(io.helidon.http.HeaderNames.create("x-forwarded-test"))
+                            .orElse("")));
             res.status(200).send("{\"result\":\"ok\"}");
         });
     }
@@ -152,5 +154,37 @@ class OpenSearchSinkLoopbackTest {
         assertThat(seen.get(1).body()).contains("scroll_id");
         assertThat(seen.get(4).body()).contains("pit_id");
         assertThat(seen.get(5).body()).isEqualTo("{}");
+    }
+
+    @Test
+    void forwardCarriesMethodPathQueryBodyAndExtraHeadersVerbatim() throws Exception {
+        SEEN.clear();
+        Reader.Response resp = sink.forward(
+                target, io.osproxy.spi.RequestCtx.HttpMethod.PUT,
+                "/legacy-orders/_doc/1", "routing=acme&refresh=true",
+                "{\"raw\":true}".getBytes(StandardCharsets.UTF_8),
+                List.of(Map.entry("x-forwarded-test", "yes")));
+
+        assertThat(resp.ok()).isTrue();
+        Seen seen = SEEN.poll();
+        assertThat(seen.method()).isEqualTo("PUT");
+        assertThat(seen.path()).contains("/legacy-orders/_doc/1");
+        assertThat(seen.path()).contains("routing=acme").contains("refresh=true");
+        assertThat(seen.body()).isEqualTo("{\"raw\":true}");
+        assertThat(seen.forwardedTestHeader()).isEqualTo("yes");
+    }
+
+    @Test
+    void forwardWithNoBodyAndNoQuerySendsABodylessRequest() throws Exception {
+        SEEN.clear();
+        Reader.Response resp = sink.forward(
+                target, io.osproxy.spi.RequestCtx.HttpMethod.GET,
+                "/legacy-orders/_doc/1", "", new byte[0], List.of());
+
+        assertThat(resp.ok()).isTrue();
+        Seen seen = SEEN.poll();
+        assertThat(seen.method()).isEqualTo("GET");
+        assertThat(seen.path()).isEqualTo("/legacy-orders/_doc/1");
+        assertThat(seen.body()).isEmpty();
     }
 }

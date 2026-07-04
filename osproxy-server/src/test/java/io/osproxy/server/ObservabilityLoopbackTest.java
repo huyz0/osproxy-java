@@ -208,6 +208,104 @@ class ObservabilityLoopbackTest {
         }
     }
 
+    @Test
+    void debugEndpointsAreRefusedWhenDisabledButMetricsStaysOn() throws Exception {
+        var observability = new Observability(16, Optional.empty());
+        MemorySink sink = new MemorySink();
+        Pipeline pipeline = new Pipeline(
+                new TenancyRouter(new ReferenceTenancy(
+                        new ClusterId("primary"), new IndexName("shared"))),
+                sink, sink);
+        WebServer server = WebServer.builder()
+                .port(0)
+                .routing(new AppHandler(
+                                pipeline, new BearerAuth(Map.of()),
+                                1 << 20, false, observability)
+                        .withDebugEndpoints(false)::route)
+                .build()
+                .start();
+        try {
+            var client = HttpClient.newHttpClient();
+            String base = "http://localhost:" + server.port();
+
+            var explain = client.send(
+                    HttpRequest.newBuilder(URI.create(base + AppHandler.EXPLAIN_PREFIX + "whatever"))
+                            .GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertThat(explain.statusCode()).isEqualTo(404);
+            assertThat(explain.body()).contains("not_enabled");
+
+            var breakglass = client.send(
+                    HttpRequest.newBuilder(URI.create(base + AppHandler.BREAKGLASS_PATH))
+                            .GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertThat(breakglass.statusCode()).isEqualTo(404);
+            assertThat(breakglass.body()).contains("not_enabled");
+
+            // /metrics is the always-on, prod-safe surface, unaffected by the switch.
+            var metrics = client.send(
+                    HttpRequest.newBuilder(URI.create(base + AppHandler.METRICS_PATH))
+                            .GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertThat(metrics.statusCode()).isEqualTo(200);
+        } finally {
+            server.stop();
+        }
+    }
+
+    @Test
+    void aWiredDiagnosticSinkReceivesTheSameCaptureAsTheLocalBreakGlassRing() throws Exception {
+        var captures = new java.util.concurrent.CopyOnWriteArrayList<String>();
+        io.osproxy.observe.DiagnosticSink sink = new io.osproxy.observe.DiagnosticSink() {
+            @Override
+            public void emit(String docJson) {
+                captures.add(docJson);
+            }
+        };
+        var observability = new Observability(16, Optional.empty()).withDiagnosticSink(sink);
+        MemorySink memSink = new MemorySink();
+        Pipeline pipeline = new Pipeline(
+                new TenancyRouter(new ReferenceTenancy(
+                        new ClusterId("primary"), new IndexName("shared"))),
+                memSink, memSink);
+        WebServer server = WebServer.builder()
+                .port(0)
+                .routing(new AppHandler(
+                                pipeline, new BearerAuth(Map.of()),
+                                1 << 20, false, observability)
+                        .withAdminToken("secret")::route)
+                .build()
+                .start();
+        try {
+            var client = HttpClient.newHttpClient();
+            String base = "http://localhost:" + server.port();
+
+            String publish = """
+                    {"directives":[
+                      {"id":"forensic-acme","level":"shape","tenant":"acme",
+                       "ring_buffer":true,"ttl_seconds":60}
+                    ]}
+                    """;
+            client.send(HttpRequest.newBuilder(URI.create(base + AppHandler.ADMIN_DIRECTIVES_PATH))
+                            .POST(HttpRequest.BodyPublishers.ofString(publish))
+                            .header("authorization", "Bearer secret").build(),
+                    HttpResponse.BodyHandlers.ofString());
+
+            client.send(HttpRequest.newBuilder(URI.create(base + "/orders/_doc/1"))
+                            .PUT(HttpRequest.BodyPublishers.ofString("{}"))
+                            .header("x-tenant", "acme").build(),
+                    HttpResponse.BodyHandlers.ofString());
+
+            assertThat(captures).hasSize(1);
+            assertThat(captures.get(0)).contains("\"endpoint\":\"ingest-doc\"");
+            // The same document also lands in the local ring: off-instance
+            // delivery is additive, not a substitute.
+            assertThat(fetchBreakGlass(client, base)).isEqualTo("[" + captures.get(0) + "]");
+        } finally {
+            server.stop();
+        }
+    }
+
     private static String fetchBreakGlass(HttpClient client, String base) throws Exception {
         var resp = client.send(
                 HttpRequest.newBuilder(URI.create(base + AppHandler.BREAKGLASS_PATH))

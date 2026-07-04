@@ -1,6 +1,8 @@
 package io.osproxy.sink;
 
 import io.osproxy.core.Target;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /** The read-path seam: fetch and query the physical store. */
@@ -56,6 +58,21 @@ public interface Reader {
     /** {@code POST /_search} — index-less search (a PIT search names no index). */
     default Response searchIndexless(Target target, byte[] body) throws SinkException {
         throw cursorsUnsupported();
+    }
+
+    /**
+     * Forwards a request verbatim: method, path, query, and body go upstream
+     * as-is, carrying {@code extraHeaders} (the tenant-agnostic passthrough
+     * primitive). Default implementations refuse: a reader that has not
+     * wired verbatim forwarding fails closed.
+     */
+    default Response forward(
+            Target target, io.osproxy.spi.RequestCtx.HttpMethod method, String path,
+            String query, byte[] body, List<Map.Entry<String, String>> extraHeaders)
+            throws SinkException {
+        throw new SinkException(
+                io.osproxy.core.ErrorCode.UNSUPPORTED_ENDPOINT,
+                "this reader does not support verbatim forwarding");
     }
 
     private static SinkException cursorsUnsupported() {

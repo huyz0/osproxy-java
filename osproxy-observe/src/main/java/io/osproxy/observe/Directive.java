@@ -15,6 +15,7 @@ import java.util.Optional;
  * @param tenant match only this tenant, when present
  * @param index match only this logical index, when present
  * @param endpoint match only this endpoint kind, when present
+ * @param principal match only this authenticated principal id, when present
  * @param samplePerMille 0..1000; 1000 = every matching request
  * @param ringBuffer when true, a matching request's explanation is also
  *     captured into the break-glass tape (operator turns this on
@@ -27,6 +28,7 @@ public record Directive(
         Optional<String> tenant,
         Optional<String> index,
         Optional<EndpointKind> endpoint,
+        Optional<String> principal,
         int samplePerMille,
         boolean ringBuffer,
         long expiresAtNanos) {
@@ -41,7 +43,8 @@ public record Directive(
     }
 
     /** The request attributes a directive matches against — all shape-level. */
-    public record RequestAttrs(String tenant, Optional<String> index, EndpointKind endpoint) {}
+    public record RequestAttrs(
+            String tenant, Optional<String> index, EndpointKind endpoint, String principal) {}
 
     /** Whether this directive applies to a request at {@code nowNanos}. */
     public boolean matches(RequestAttrs attrs, String requestId, long nowNanos) {
@@ -55,6 +58,9 @@ public record Directive(
             return false;
         }
         if (endpoint.isPresent() && endpoint.get() != attrs.endpoint()) {
+            return false;
+        }
+        if (principal.isPresent() && !principal.get().equals(attrs.principal())) {
             return false;
         }
         // Deterministic sampling: the same request id always lands in the
