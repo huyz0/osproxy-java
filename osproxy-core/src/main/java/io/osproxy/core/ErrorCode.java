@@ -14,6 +14,7 @@ public enum ErrorCode {
     AUTH_FAILED("auth_failed", 401),
     UNAUTHORIZED("unauthorized", 403),
     UPSTREAM_FAILED("upstream_failed", 502),
+    UPSTREAM_UNAVAILABLE("upstream_unavailable", 503),
     OVERLOADED("overloaded", 429),
     PAYLOAD_TOO_LARGE("payload_too_large", 413),
     MALFORMED_REQUEST("malformed_request", 400),

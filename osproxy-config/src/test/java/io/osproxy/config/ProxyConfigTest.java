@@ -55,4 +55,39 @@ class ProxyConfigTest {
         assertThat(cfg.port()).isZero();
         assertThat(cfg.tokens()).isEmpty();
     }
+
+    @Test
+    void tlsAndHardeningKeysLoad() {
+        var cfg = ProxyConfig.load(config(Map.of(
+                "osproxy.upstream", "http://localhost:9200",
+                "osproxy.index", "shared",
+                "osproxy.max-body-bytes", "1024",
+                "osproxy.require-tls-for-mutation", "true",
+                "osproxy.tls.cert-path", "/tmp/cert.pem",
+                "osproxy.tls.key-path", "/tmp/key.pem",
+                "osproxy.tls.client-ca-path", "/tmp/ca.pem")));
+        assertThat(cfg.maxBodyBytes()).isEqualTo(1024);
+        assertThat(cfg.requireTlsForMutation()).isTrue();
+        assertThat(cfg.tls()).isPresent();
+        assertThat(cfg.tls().get().clientCaPath()).contains("/tmp/ca.pem");
+    }
+
+    @Test
+    void tlsCertWithoutKeyFailsFast() {
+        assertThatThrownBy(() -> ProxyConfig.load(config(Map.of(
+                        "osproxy.upstream", "http://x",
+                        "osproxy.index", "i",
+                        "osproxy.tls.cert-path", "/tmp/cert.pem"))))
+                .isInstanceOf(ProxyConfig.ConfigException.class)
+                .hasMessageContaining("key-path");
+        assertThatThrownBy(() -> new ProxyConfig.TlsSettings("", "/k", java.util.Optional.empty()))
+                .isInstanceOf(ProxyConfig.ConfigException.class);
+    }
+
+    @Test
+    void badBodyCapFailsFast() {
+        assertThatThrownBy(() -> new ProxyConfig(
+                        0, "http://x", "i", Map.of(), 0, false, java.util.Optional.empty()))
+                .hasMessageContaining("max-body-bytes");
+    }
 }

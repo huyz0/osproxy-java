@@ -26,10 +26,19 @@ public final class AppHandler {
 
     private final Pipeline pipeline;
     private final BearerAuth auth;
+    private final long maxBodyBytes;
+    private final boolean requireTlsForMutation;
 
     public AppHandler(Pipeline pipeline, BearerAuth auth) {
+        this(pipeline, auth, io.osproxy.config.ProxyConfig.DEFAULT_MAX_BODY_BYTES, false);
+    }
+
+    public AppHandler(
+            Pipeline pipeline, BearerAuth auth, long maxBodyBytes, boolean requireTlsForMutation) {
         this.pipeline = pipeline;
         this.auth = auth;
+        this.maxBodyBytes = maxBodyBytes;
+        this.requireTlsForMutation = requireTlsForMutation;
     }
 
     /** Installs the catch-all route. */
@@ -54,7 +63,28 @@ public final class AppHandler {
 
         String path = req.path().rawPath();
         Classify.Classified classified = Classify.classify(method.get(), path);
+
+        // NFR-S1: a body-mutating request must arrive over TLS when required.
+        if (requireTlsForMutation && classified.endpoint().isWrite() && !req.isSecure()) {
+            send(res, PipelineResponse.error(ErrorCode.UNAUTHORIZED));
+            return;
+        }
+
+        // Bound the working set before buffering: over-cap bodies are refused
+        // up front (fail-closed), not allocated for.
+        long declared = req.headers()
+                .first(HeaderNames.CONTENT_LENGTH)
+                .map(Long::parseLong)
+                .orElse(0L);
+        if (declared > maxBodyBytes) {
+            send(res, PipelineResponse.error(ErrorCode.PAYLOAD_TOO_LARGE));
+            return;
+        }
         byte[] body = req.content().hasEntity() ? req.content().as(byte[].class) : new byte[0];
+        if (body.length > maxBodyBytes) {
+            send(res, PipelineResponse.error(ErrorCode.PAYLOAD_TOO_LARGE));
+            return;
+        }
 
         List<Map.Entry<String, String>> headers = new ArrayList<>();
         req.headers().forEach(h -> headers.add(Map.entry(h.name(), h.values())));

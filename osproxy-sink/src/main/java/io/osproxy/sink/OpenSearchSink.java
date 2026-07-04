@@ -2,6 +2,7 @@ package io.osproxy.sink;
 
 import io.helidon.webclient.api.HttpClientResponse;
 import io.helidon.webclient.api.WebClient;
+import io.osproxy.core.Clock;
 import io.osproxy.core.ClusterId;
 import io.osproxy.core.ErrorCode;
 import io.osproxy.core.Target;
@@ -21,21 +22,57 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class OpenSearchSink implements Sink, Reader {
 
+    /** Upstream resilience knobs; {@link #DEFAULTS} suits a local cluster. */
+    public record Resilience(
+            Clock clock, long timeoutMillis, int breakerFailureThreshold, long breakerOpenMillis) {}
+
+    /** 10s upstream timeout; open after 5 consecutive failures for 5s. */
+    public static final Resilience DEFAULTS =
+            new Resilience(new io.osproxy.core.SystemClock(), 10_000, 5, 5_000);
+
     private final Map<String, WebClient> clients = new ConcurrentHashMap<>();
+    private final Map<String, CircuitBreaker> breakers = new ConcurrentHashMap<>();
     private final Map<ClusterId, String> endpoints;
+    private final Resilience resilience;
 
     /** @param endpoints cluster id → base URL (e.g. {@code http://localhost:9200}) */
     public OpenSearchSink(Map<ClusterId, String> endpoints) {
-        this.endpoints = Map.copyOf(endpoints);
+        this(endpoints, DEFAULTS);
     }
 
-    private WebClient client(Target target) throws SinkException {
-        String base = target.endpointOverride()
+    public OpenSearchSink(Map<ClusterId, String> endpoints, Resilience resilience) {
+        this.endpoints = Map.copyOf(endpoints);
+        this.resilience = resilience;
+    }
+
+    private String base(Target target) throws SinkException {
+        return target.endpointOverride()
                 .or(() -> Optional.ofNullable(endpoints.get(target.cluster())))
                 .orElseThrow(() -> new SinkException(
                         ErrorCode.PLACEMENT_BACKEND_UNAVAILABLE,
                         "no endpoint configured for cluster " + target.cluster().value()));
-        return clients.computeIfAbsent(base, b -> WebClient.builder().baseUri(b).build());
+    }
+
+    private WebClient client(Target target) throws SinkException {
+        String base = base(target);
+        // Fail fast behind a dead upstream instead of queueing onto it.
+        CircuitBreaker breaker = breakers.computeIfAbsent(base, b -> new CircuitBreaker(
+                resilience.clock(),
+                resilience.breakerFailureThreshold(),
+                resilience.breakerOpenMillis() * 1_000_000));
+        if (!breaker.allow()) {
+            throw new SinkException(
+                    ErrorCode.UPSTREAM_UNAVAILABLE, "circuit open for " + target.cluster().value());
+        }
+        return clients.computeIfAbsent(base, b -> WebClient.builder()
+                .baseUri(b)
+                .readTimeout(java.time.Duration.ofMillis(resilience.timeoutMillis()))
+                .build());
+    }
+
+    /** The breaker for a target (reporting outcomes / diagnostics). */
+    private CircuitBreaker breaker(Target target) throws SinkException {
+        return breakers.get(base(target));
     }
 
     @Override
@@ -71,11 +108,13 @@ public final class OpenSearchSink implements Sink, Reader {
                         withRouting(client.delete("/" + index + "/_doc/" + id), r).request();
             };
             try (response) {
+                breaker(op.target()).onSuccess();
                 String result = response.status().code() < 300 ? "ok" : "error";
                 return new WriteBatch.OpResult(
                         response.status().code(), result, op.op().physicalId());
             }
         } catch (RuntimeException e) {
+            breaker(op.target()).onFailure();
             throw new SinkException(ErrorCode.UPSTREAM_FAILED, "upstream write failed", e);
         }
     }
@@ -84,7 +123,7 @@ public final class OpenSearchSink implements Sink, Reader {
     public Response get(Target target, String physicalId, Optional<String> routing)
             throws SinkException {
         WebClient client = client(target);
-        return request(() -> withRouting(
+        return request(target, () -> withRouting(
                 client.get("/" + target.index().value() + "/_doc/" + physicalId), routing)
                 .request());
     }
@@ -92,7 +131,7 @@ public final class OpenSearchSink implements Sink, Reader {
     @Override
     public Response search(Target target, byte[] body) throws SinkException {
         WebClient client = client(target);
-        return request(() -> client.post("/" + target.index().value() + "/_search")
+        return request(target, () -> client.post("/" + target.index().value() + "/_search")
                 .header(io.helidon.http.HeaderNames.CONTENT_TYPE, "application/json")
                 .submit(body.length == 0 ? "{}".getBytes(StandardCharsets.UTF_8) : body));
     }
@@ -100,7 +139,7 @@ public final class OpenSearchSink implements Sink, Reader {
     @Override
     public Response count(Target target, byte[] body) throws SinkException {
         WebClient client = client(target);
-        return request(() -> client.post("/" + target.index().value() + "/_count")
+        return request(target, () -> client.post("/" + target.index().value() + "/_count")
                 .header(io.helidon.http.HeaderNames.CONTENT_TYPE, "application/json")
                 .submit(body.length == 0 ? "{}".getBytes(StandardCharsets.UTF_8) : body));
     }
@@ -109,15 +148,17 @@ public final class OpenSearchSink implements Sink, Reader {
         HttpClientResponse invoke() throws SinkException;
     }
 
-    private static Response request(Call call) throws SinkException {
+    private Response request(Target target, Call call) throws SinkException {
         try {
             try (HttpClientResponse response = call.invoke()) {
+                breaker(target).onSuccess();
                 byte[] body = response.entity().hasEntity()
                         ? response.as(byte[].class)
                         : new byte[0];
                 return new Response(response.status().code(), body);
             }
         } catch (RuntimeException e) {
+            breaker(target).onFailure();
             throw new SinkException(ErrorCode.UPSTREAM_FAILED, "upstream read failed", e);
         }
     }
