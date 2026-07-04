@@ -1,0 +1,8 @@
+# Reference configuration; every key is overridable via config sources
+# (e.g. environment). See osproxy-config's ProxyConfig.
+osproxy:
+  port: 9201
+  upstream: "http://localhost:9200"
+  index: "shared"
+  # tokens:
+  #   some-secret-token: "acme"

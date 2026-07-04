@@ -30,6 +30,9 @@ dependencies {
     testImplementation(libs.archunit)
     testImplementation(libs.testcontainers)
     testImplementation(libs.testcontainers.junit)
+    // Docker engine 29+ refuses docker-java 3.4's pinned API version (1.32,
+    // min is now 1.40) with a 400; 3.5 negotiates a supported version.
+    testImplementation(platform("com.github.docker-java:docker-java-bom:3.5.1"))
     testRuntimeOnly(libs.junit.platform.launcher)
 }
 
@@ -40,20 +43,6 @@ tasks.test {
     if (!project.hasProperty("includeIntegration")) {
         useJUnitPlatform {
             excludeTags("integration")
-        }
-    }
-}
-
-// main() wiring is exercised by the e2e integration test, not unit tests, so
-// the server module carries a lower unit-coverage floor than the libraries.
-tasks.jacocoTestCoverageVerification {
-    violationRules {
-        rule {
-            limit {
-                counter = "LINE"
-                value = "COVEREDRATIO"
-                minimum = "0.50".toBigDecimal()
-            }
         }
     }
 }

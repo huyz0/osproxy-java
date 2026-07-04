@@ -33,15 +33,17 @@ tasks.withType<Test>().configureEach {
     }
 }
 
-// Coverage floor per module (90% lines), verified as part of `check`.
-// The server module relaxes this for its main() wiring — see its build file.
+// Coverage floor per module (90% lines), verified as part of `check`. A
+// module may relax it by setting `coverageFloor` in its gradle.properties
+// (the server does, for its main() wiring which only the e2e exercises).
+val coverageFloor = (findProperty("coverageFloor") as String?) ?: "0.90"
 tasks.jacocoTestCoverageVerification {
     violationRules {
         rule {
             limit {
                 counter = "LINE"
                 value = "COVEREDRATIO"
-                minimum = "0.90".toBigDecimal()
+                minimum = coverageFloor.toBigDecimal()
             }
         }
     }

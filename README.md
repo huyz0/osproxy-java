@@ -39,6 +39,11 @@ well) and Docker for the integration tests.
 ./gradlew :osproxy-server:run                          # run the reference server (ZGC)
 ```
 
+Docker engine 29+ note: docker-java's default API version (1.32) is below the
+engine's minimum (1.40), which breaks Testcontainers' environment detection
+with an opaque 400. The build already pins docker-java 3.5+, and if detection
+still fails, add `api.version=1.44` to `~/.docker-java.properties`.
+
 Git hooks (`git config core.hooksPath .githooks`, set automatically on fresh
 clones by `scripts/setup-hooks.sh`) enforce conventional commits and run the
 gate before every commit.
