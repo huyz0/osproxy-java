@@ -20,7 +20,9 @@ tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
     options.release = 25
     // Warnings are defects, as in the Rust workspace's `clippy -D warnings`.
-    options.compilerArgs.addAll(listOf("-Xlint:all", "-Werror"))
+    // `-serial`: Java serialization is not used anywhere in this codebase, so
+    // serialVersionUID on every exception would be pure noise.
+    options.compilerArgs.addAll(listOf("-Xlint:all,-serial", "-Werror"))
 }
 
 tasks.withType<Test>().configureEach {
