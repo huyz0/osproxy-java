@@ -44,6 +44,7 @@ public final class AppHandler {
     private final boolean requireTlsForMutation;
     private final Observability observability;
     private Optional<String> adminToken = Optional.empty();
+    private Optional<io.osproxy.capture.Capture> capture = Optional.empty();
 
     public AppHandler(Pipeline pipeline, BearerAuth auth) {
         this(pipeline, auth, io.osproxy.config.ProxyConfig.DEFAULT_MAX_BODY_BYTES, false);
@@ -63,6 +64,12 @@ public final class AppHandler {
         this.maxBodyBytes = maxBodyBytes;
         this.requireTlsForMutation = requireTlsForMutation;
         this.observability = observability;
+    }
+
+    /** Enables full-fidelity traffic capture (wrap with Capture.redacting). */
+    public AppHandler withCapture(io.osproxy.capture.Capture capture) {
+        this.capture = Optional.of(capture);
+        return this;
     }
 
     /** Enables the directive admin endpoint, gated by this bearer token. */
@@ -168,6 +175,8 @@ public final class AppHandler {
         long started = System.nanoTime();
         PipelineResponse out = pipeline.handle(ctx);
         record(ctx, res, out, System.nanoTime() - started);
+        capture.ifPresent(c -> c.capture(new io.osproxy.capture.Capture.Record(
+                ctx.method().name(), path, headers, body, out.status(), out.body())));
         send(res, out);
     }
 

@@ -25,6 +25,7 @@ include(
     "osproxy-tenancy",
     "osproxy-sink",
     "osproxy-observe",
+    "osproxy-capture",
     "osproxy-engine",
     "osproxy-config",
     "osproxy-server",

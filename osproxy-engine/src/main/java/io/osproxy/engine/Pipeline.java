@@ -36,19 +36,29 @@ public final class Pipeline {
     private final Reader reader;
     private final MultiOps multiOps;
     private final Cursors cursors;
+    private final Optional<AsyncWrites.AsyncWriteSink> asyncSink;
 
     public Pipeline(TenancyRouter router, Sink sink, Reader reader) {
-        this(router, sink, reader, Optional.empty());
+        this(router, sink, reader, Optional.empty(), Optional.empty());
     }
 
     /** With a cursor codec, the scroll/PIT endpoints go live. */
     public Pipeline(
             TenancyRouter router, Sink sink, Reader reader, Optional<CursorCodec> cursorCodec) {
+        this(router, sink, reader, cursorCodec, Optional.empty());
+    }
+
+    /** With an async sink, per-request async write mode goes live too. */
+    public Pipeline(
+            TenancyRouter router, Sink sink, Reader reader,
+            Optional<CursorCodec> cursorCodec,
+            Optional<AsyncWrites.AsyncWriteSink> asyncSink) {
         this.router = router;
         this.sink = sink;
         this.reader = reader;
         this.multiOps = new MultiOps(this);
         this.cursors = new Cursors(this, cursorCodec);
+        this.asyncSink = asyncSink;
     }
 
     TenancyRouter router() {
@@ -66,6 +76,17 @@ public final class Pipeline {
     /** Handles one classified, authenticated request. */
     public PipelineResponse handle(RequestCtx ctx) {
         try {
+            if (AsyncWrites.wantsAsync(ctx)) {
+                // Refuse-don't-lie: async mode exists only for single-doc
+                // writes, and only when a durable sink is wired.
+                if (ctx.endpoint() != io.osproxy.core.EndpointKind.INGEST_DOC
+                        && ctx.endpoint() != io.osproxy.core.EndpointKind.DELETE_BY_ID) {
+                    return PipelineResponse.error(ErrorCode.UNSUPPORTED_ENDPOINT);
+                }
+                if (asyncSink.isEmpty()) {
+                    return PipelineResponse.error(ErrorCode.UPSTREAM_UNAVAILABLE);
+                }
+            }
             return switch (ctx.endpoint()) {
                 case INGEST_DOC -> ingestDoc(ctx);
                 case GET_BY_ID -> getById(ctx);
@@ -112,8 +133,11 @@ public final class Pipeline {
         DocOp op = create
                 ? new DocOp.Create(physicalId, body, routing)
                 : new DocOp.Index(physicalId, body, routing);
-        WriteBatch.Ack ack = sink.write(List.of(
-                new WriteBatch.Op(decision.target(), op, decision.epoch())));
+        WriteBatch.Op writeOp = new WriteBatch.Op(decision.target(), op, decision.epoch());
+        if (AsyncWrites.wantsAsync(ctx)) {
+            return AsyncWrites.enqueue(asyncSink.orElseThrow(), writeOp);
+        }
+        WriteBatch.Ack ack = sink.write(List.of(writeOp));
 
         WriteBatch.OpResult result = ack.results().get(0);
         return ackResponse(ctx, result, logicalId);
@@ -148,10 +172,14 @@ public final class Pipeline {
         String logicalId = ctx.docId().orElseThrow();
         String physicalId = mapId(rule, decision, logicalId);
 
-        WriteBatch.Ack ack = sink.write(List.of(new WriteBatch.Op(
+        WriteBatch.Op writeOp = new WriteBatch.Op(
                 decision.target(),
                 new DocOp.Delete(physicalId, routing(rule, decision)),
-                decision.epoch())));
+                decision.epoch());
+        if (AsyncWrites.wantsAsync(ctx)) {
+            return AsyncWrites.enqueue(asyncSink.orElseThrow(), writeOp);
+        }
+        WriteBatch.Ack ack = sink.write(List.of(writeOp));
         return ackResponse(ctx, ack.results().get(0), logicalId);
     }
 
