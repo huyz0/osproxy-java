@@ -95,7 +95,18 @@ public final class Observability {
         if (snapshot.wantsRingBuffer(attrs, doc.requestId(), now)) {
             String json = doc.toJson();
             if (diagnosticSink.enabled()) {
-                diagnosticSink.emit(json);
+                // The seam's contract (DiagnosticSink) says implementations
+                // must not throw, but this is the enforcement point, not just
+                // the request: a sink that throws anyway (a broken pipe, a
+                // synchronous network call gone wrong) must never break the
+                // request it happened to observe. Best-effort really means
+                // best-effort here, not "as long as nothing goes wrong".
+                try {
+                    diagnosticSink.emit(json);
+                } catch (RuntimeException e) {
+                    // Swallowed by design: diagnostics is never allowed to
+                    // affect the request it is observing.
+                }
             }
             breakGlass.capture(json);
         }

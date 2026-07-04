@@ -11,6 +11,13 @@ import java.util.Optional;
  * Config (application.yaml merged with {@code OSPROXY_*} environment
  * overrides) and validated fast-fail: a bad config never boots a proxy.
  *
+ * <p>The telescoping constructors below exist for tests written before a
+ * later field landed and are kept for source compatibility; each one just
+ * fills the newer fields with their defaults. Prefer {@link #builder()} for
+ * any new construction (tests included) — it names every field instead of
+ * relying on positional order, so a new field can't silently shift the
+ * meaning of an existing constructor call.
+ *
  * @param port ingress port (0 = ephemeral, for tests)
  * @param upstream the one upstream cluster's base URL
  * @param index the shared physical index of the reference tenancy
@@ -210,6 +217,174 @@ public record ProxyConfig(
 
     /** The default request-body cap (32 MiB), matching the Rust proxy. */
     public static final long DEFAULT_MAX_BODY_BYTES = 32L * 1024 * 1024;
+
+    /** A fresh builder, defaulted the same way {@link #load} defaults an absent key. */
+    public static Builder builder(int port, String upstream, String index) {
+        return new Builder(port, upstream, index);
+    }
+
+    /**
+     * Builds a {@link ProxyConfig} by name rather than by position — the
+     * long-term replacement for the telescoping constructors above. Every
+     * field not set explicitly keeps the same default {@link #load} would
+     * apply for an absent config key.
+     */
+    public static final class Builder {
+        private final int port;
+        private final String upstream;
+        private final String index;
+        private Map<String, String> tokens = Map.of();
+        private long maxBodyBytes = DEFAULT_MAX_BODY_BYTES;
+        private boolean requireTlsForMutation;
+        private Optional<TlsSettings> tls = Optional.empty();
+        private Optional<String> cursorAffinityKey = Optional.empty();
+        private boolean logRequests;
+        private Optional<String> directiveAdminToken = Optional.empty();
+        private boolean fips;
+        private Optional<String> otlpEndpoint = Optional.empty();
+        private String serviceName = "osproxy";
+        private Optional<String> directivesUrl = Optional.empty();
+        private int directivesPollSeconds = 10;
+        private Optional<String> fanoutBootstrapServers = Optional.empty();
+        private String fanoutTopic = "osproxy-writes";
+        private Optional<String> placementsUrl = Optional.empty();
+        private int placementsPollSeconds = 10;
+        private boolean debugEndpoints = true;
+        private boolean logDiagnosticCaptures;
+        private Optional<String> passthroughCluster = Optional.empty();
+        private Optional<String> passthroughEndpoint = Optional.empty();
+        private List<String> passthroughIndices = List.of();
+        private boolean headerForwardingEnabled = true;
+        private List<String> headerForwardingDeny = List.of();
+
+        private Builder(int port, String upstream, String index) {
+            this.port = port;
+            this.upstream = upstream;
+            this.index = index;
+        }
+
+        public Builder tokens(Map<String, String> tokens) {
+            this.tokens = tokens;
+            return this;
+        }
+
+        public Builder maxBodyBytes(long maxBodyBytes) {
+            this.maxBodyBytes = maxBodyBytes;
+            return this;
+        }
+
+        public Builder requireTlsForMutation(boolean requireTlsForMutation) {
+            this.requireTlsForMutation = requireTlsForMutation;
+            return this;
+        }
+
+        public Builder tls(TlsSettings tls) {
+            this.tls = Optional.of(tls);
+            return this;
+        }
+
+        public Builder cursorAffinityKey(String cursorAffinityKey) {
+            this.cursorAffinityKey = Optional.of(cursorAffinityKey);
+            return this;
+        }
+
+        public Builder logRequests(boolean logRequests) {
+            this.logRequests = logRequests;
+            return this;
+        }
+
+        public Builder directiveAdminToken(String directiveAdminToken) {
+            this.directiveAdminToken = Optional.of(directiveAdminToken);
+            return this;
+        }
+
+        public Builder fips(boolean fips) {
+            this.fips = fips;
+            return this;
+        }
+
+        public Builder otlpEndpoint(String otlpEndpoint) {
+            this.otlpEndpoint = Optional.of(otlpEndpoint);
+            return this;
+        }
+
+        public Builder serviceName(String serviceName) {
+            this.serviceName = serviceName;
+            return this;
+        }
+
+        public Builder directivesUrl(String directivesUrl) {
+            this.directivesUrl = Optional.of(directivesUrl);
+            return this;
+        }
+
+        public Builder directivesPollSeconds(int directivesPollSeconds) {
+            this.directivesPollSeconds = directivesPollSeconds;
+            return this;
+        }
+
+        public Builder fanoutBootstrapServers(String fanoutBootstrapServers) {
+            this.fanoutBootstrapServers = Optional.of(fanoutBootstrapServers);
+            return this;
+        }
+
+        public Builder fanoutTopic(String fanoutTopic) {
+            this.fanoutTopic = fanoutTopic;
+            return this;
+        }
+
+        public Builder placementsUrl(String placementsUrl) {
+            this.placementsUrl = Optional.of(placementsUrl);
+            return this;
+        }
+
+        public Builder placementsPollSeconds(int placementsPollSeconds) {
+            this.placementsPollSeconds = placementsPollSeconds;
+            return this;
+        }
+
+        public Builder debugEndpoints(boolean debugEndpoints) {
+            this.debugEndpoints = debugEndpoints;
+            return this;
+        }
+
+        public Builder logDiagnosticCaptures(boolean logDiagnosticCaptures) {
+            this.logDiagnosticCaptures = logDiagnosticCaptures;
+            return this;
+        }
+
+        public Builder passthrough(String cluster, String endpoint) {
+            this.passthroughCluster = Optional.of(cluster);
+            this.passthroughEndpoint = Optional.of(endpoint);
+            return this;
+        }
+
+        public Builder passthroughIndices(List<String> passthroughIndices) {
+            this.passthroughIndices = passthroughIndices;
+            return this;
+        }
+
+        public Builder headerForwardingEnabled(boolean headerForwardingEnabled) {
+            this.headerForwardingEnabled = headerForwardingEnabled;
+            return this;
+        }
+
+        public Builder headerForwardingDeny(List<String> headerForwardingDeny) {
+            this.headerForwardingDeny = headerForwardingDeny;
+            return this;
+        }
+
+        public ProxyConfig build() {
+            return new ProxyConfig(
+                    port, upstream, index, tokens,
+                    maxBodyBytes, requireTlsForMutation, tls, cursorAffinityKey, logRequests,
+                    directiveAdminToken, fips, otlpEndpoint, serviceName,
+                    directivesUrl, directivesPollSeconds, fanoutBootstrapServers, fanoutTopic,
+                    placementsUrl, placementsPollSeconds, debugEndpoints, logDiagnosticCaptures,
+                    passthroughCluster, passthroughEndpoint, passthroughIndices,
+                    headerForwardingEnabled, headerForwardingDeny);
+        }
+    }
 
     public ProxyConfig {
         if (port < 0 || port > 65535) {

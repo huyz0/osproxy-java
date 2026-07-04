@@ -89,6 +89,63 @@ class PassthroughE2eTest {
     }
 
     @Test
+    void theDenyListStillAppliesOnAPassthroughForwardedRequest() throws Exception {
+        var seenAuth = new AtomicReference<String>();
+        var seenTenant = new AtomicReference<String>();
+        WebServer upstream = WebServer.builder()
+                .routing((HttpRouting.Builder r) -> r.any((req, res) -> {
+                    seenAuth.set(req.headers()
+                            .first(io.helidon.http.HeaderNames.AUTHORIZATION).orElse(null));
+                    seenTenant.set(req.headers()
+                            .first(io.helidon.http.HeaderNames.create("x-tenant")).orElse(null));
+                    res.status(200).send("{\"ok\":true}");
+                }))
+                .port(0)
+                .build()
+                .start();
+        try {
+            var cluster = new ClusterId("legacy");
+            var policy = PassthroughPolicy.of(cluster, "http://localhost:" + upstream.port())
+                    .withIndexPrefixes(List.of("legacy-"));
+            var sink = new io.osproxy.sink.OpenSearchSink(
+                    Map.of(cluster, "http://localhost:" + upstream.port()));
+            var reference = new ReferenceTenancy(cluster, new IndexName("shared"));
+            Pipeline pipeline = new Pipeline(
+                    new TenancyRouter(reference), sink, sink,
+                    Optional.empty(), Optional.empty(), Optional.of(policy));
+            // A deny-listed header must be dropped on the passthrough path
+            // exactly like every other endpoint's own sink call — both flow
+            // through the one ForwardHeaders binding computed per request.
+            WebServer proxy = WebServer.builder()
+                    .port(0)
+                    .routing(new AppHandler(pipeline, new BearerAuth(Map.of()))
+                            .withForwardPolicy(new ForwardPolicy(true, List.of("authorization")))
+                            ::route)
+                    .build()
+                    .start();
+            try {
+                var client = HttpClient.newHttpClient();
+                var req = HttpRequest.newBuilder(
+                                URI.create("http://localhost:" + proxy.port()
+                                        + "/legacy-orders/_doc/some-id"))
+                        .PUT(HttpRequest.BodyPublishers.ofString("{}"))
+                        .header("x-tenant", "acme")
+                        .header("authorization", "Bearer client-cred")
+                        .build();
+                var resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+
+                assertThat(resp.statusCode()).isEqualTo(200);
+                assertThat(seenAuth.get()).as("denied header must not reach the upstream").isNull();
+                assertThat(seenTenant.get()).as("non-denied headers still pass").isEqualTo("acme");
+            } finally {
+                proxy.stop();
+            }
+        } finally {
+            upstream.stop();
+        }
+    }
+
+    @Test
     void aNonMatchingIndexStaysFullyTenantedNotForwarded() throws Exception {
         var cluster = new ClusterId("legacy");
         var policy = PassthroughPolicy.of(cluster, "http://unused:9200")

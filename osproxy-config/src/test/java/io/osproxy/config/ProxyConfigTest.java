@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.helidon.config.Config;
 import io.helidon.config.ConfigSources;
 import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 class ProxyConfigTest {
@@ -172,5 +173,70 @@ class ProxyConfigTest {
                 "osproxy.header-forwarding.deny", "authorization, x-secret")));
         assertThat(configured.headerForwardingEnabled()).isFalse();
         assertThat(configured.headerForwardingDeny()).containsExactly("authorization", "x-secret");
+    }
+
+    @Test
+    void builderDefaultsMatchLoadDefaultsForAnAbsentKey() {
+        var viaBuilder = ProxyConfig.builder(9200, "http://localhost:9200", "shared").build();
+        var viaLoad = ProxyConfig.load(config(Map.of(
+                "osproxy.upstream", "http://localhost:9200",
+                "osproxy.index", "shared")));
+        // Every field the builder defaults must match what load() defaults an
+        // absent key to, so the two construction paths never silently diverge.
+        assertThat(viaBuilder).isEqualTo(viaLoad);
+    }
+
+    @Test
+    void builderSetsEveryFieldByName() {
+        var tls = new ProxyConfig.TlsSettings("cert.pem", "key.pem", Optional.empty());
+        var cfg = ProxyConfig.builder(8080, "http://localhost:9200", "shared")
+                .tokens(Map.of("secret", "acme"))
+                .maxBodyBytes(1024)
+                .requireTlsForMutation(true)
+                .tls(tls)
+                .cursorAffinityKey("0123456789abcdef")
+                .logRequests(true)
+                .directiveAdminToken("admin-token")
+                .fips(true)
+                .otlpEndpoint("http://collector:4318")
+                .serviceName("my-osproxy")
+                .directivesUrl("http://directives")
+                .directivesPollSeconds(5)
+                .fanoutBootstrapServers("kafka:9092")
+                .fanoutTopic("writes")
+                .placementsUrl("http://placements")
+                .placementsPollSeconds(7)
+                .debugEndpoints(false)
+                .logDiagnosticCaptures(true)
+                .passthrough("legacy", "http://legacy:9200")
+                .passthroughIndices(java.util.List.of("legacy-"))
+                .headerForwardingEnabled(false)
+                .headerForwardingDeny(java.util.List.of("authorization"))
+                .build();
+
+        assertThat(cfg.port()).isEqualTo(8080);
+        assertThat(cfg.tokens()).containsEntry("secret", "acme");
+        assertThat(cfg.maxBodyBytes()).isEqualTo(1024);
+        assertThat(cfg.requireTlsForMutation()).isTrue();
+        assertThat(cfg.tls()).contains(tls);
+        assertThat(cfg.cursorAffinityKey()).contains("0123456789abcdef");
+        assertThat(cfg.logRequests()).isTrue();
+        assertThat(cfg.directiveAdminToken()).contains("admin-token");
+        assertThat(cfg.fips()).isTrue();
+        assertThat(cfg.otlpEndpoint()).contains("http://collector:4318");
+        assertThat(cfg.serviceName()).isEqualTo("my-osproxy");
+        assertThat(cfg.directivesUrl()).contains("http://directives");
+        assertThat(cfg.directivesPollSeconds()).isEqualTo(5);
+        assertThat(cfg.fanoutBootstrapServers()).contains("kafka:9092");
+        assertThat(cfg.fanoutTopic()).isEqualTo("writes");
+        assertThat(cfg.placementsUrl()).contains("http://placements");
+        assertThat(cfg.placementsPollSeconds()).isEqualTo(7);
+        assertThat(cfg.debugEndpoints()).isFalse();
+        assertThat(cfg.logDiagnosticCaptures()).isTrue();
+        assertThat(cfg.passthroughCluster()).contains("legacy");
+        assertThat(cfg.passthroughEndpoint()).contains("http://legacy:9200");
+        assertThat(cfg.passthroughIndices()).containsExactly("legacy-");
+        assertThat(cfg.headerForwardingEnabled()).isFalse();
+        assertThat(cfg.headerForwardingDeny()).containsExactly("authorization");
     }
 }
