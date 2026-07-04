@@ -96,6 +96,17 @@ This comparison is a single controlled run, not a statistically
 rigorous study — read it as "same order of magnitude, footprint aside,"
 not as a claim of parity down to the percentage point.
 
+## Streaming passthrough bypasses the body cap entirely
+
+`PassthroughE2eTest.aBodyLargerThanMaxBodyBytesStreamsThroughWithoutBeingCapped`
+proxies a 16 MiB body through a proxy configured with a 1 KiB
+`osproxy.max-body-bytes` cap and asserts the upstream receives all 16 MiB —
+proving the streaming passthrough path (`AppHandler.streamPassthrough` →
+`Reader.forwardStreaming`) genuinely never materializes the body as a
+`byte[]`, rather than just raising an internal buffer size. Every tenanted
+endpoint still buffers up to the cap (`AppHandler.readCapped`); only
+passthrough-matched requests take the streaming path.
+
 ## Connection handling
 
 `OpenSearchSink` pools one Helidon `WebClient` per cluster base URL, with a

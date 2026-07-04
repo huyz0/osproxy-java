@@ -100,6 +100,16 @@ public final class Pipeline {
         return this;
     }
 
+    /**
+     * The configured passthrough policy, when set — exposed so the ingress
+     * (which owns the raw request/response streams) can route a matching
+     * request through a true streaming forward instead of this class's own
+     * buffered {@link #handle}, without duplicating the match logic.
+     */
+    public Optional<PassthroughPolicy> passthroughPolicy() {
+        return passthrough;
+    }
+
     TenancyRouter router() {
         return router;
     }
@@ -108,7 +118,11 @@ public final class Pipeline {
         return sink;
     }
 
-    Reader reader() {
+    /**
+     * The reader, exposed so the ingress can drive a streaming passthrough
+     * forward directly (see {@link #passthroughPolicy()}).
+     */
+    public Reader reader() {
         return reader;
     }
 
@@ -173,10 +187,8 @@ public final class Pipeline {
      */
     private PipelineResponse forward(RequestCtx ctx, PassthroughPolicy policy)
             throws SinkException {
-        io.osproxy.core.Target target = new io.osproxy.core.Target(
-                policy.cluster(), new io.osproxy.core.IndexName("passthrough"), policy.endpoint());
         Reader.Response outcome = reader.forward(
-                target, ctx.method(), ctx.path(), ctx.rawQuery(), ctx.body(), List.of());
+                policy.target(), ctx.method(), ctx.path(), ctx.rawQuery(), ctx.body(), List.of());
         return new PipelineResponse(outcome.status(), outcome.body());
     }
 

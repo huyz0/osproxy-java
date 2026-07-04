@@ -89,6 +89,69 @@ class PassthroughE2eTest {
     }
 
     @Test
+    void aBodyLargerThanMaxBodyBytesStreamsThroughWithoutBeingCapped() throws Exception {
+        var seenLength = new AtomicReference<Long>();
+        WebServer upstream = WebServer.builder()
+                .routing((HttpRouting.Builder r) -> r.any((req, res) -> {
+                    long total = 0;
+                    if (req.content().hasEntity()) {
+                        try (var in = req.content().inputStream()) {
+                            byte[] chunk = new byte[8192];
+                            int n;
+                            while ((n = in.read(chunk)) >= 0) {
+                                total += n;
+                            }
+                        }
+                    }
+                    seenLength.set(total);
+                    res.status(200).send("{\"ok\":true}");
+                }))
+                .port(0)
+                .build()
+                .start();
+        try {
+            var cluster = new ClusterId("legacy");
+            var policy = PassthroughPolicy.of(cluster, "http://localhost:" + upstream.port())
+                    .withIndexPrefixes(List.of("legacy-"));
+            var sink = new io.osproxy.sink.OpenSearchSink(
+                    Map.of(cluster, "http://localhost:" + upstream.port()));
+            var reference = new ReferenceTenancy(cluster, new IndexName("shared"));
+            Pipeline pipeline = new Pipeline(
+                    new TenancyRouter(reference), sink, sink,
+                    Optional.empty(), Optional.empty(), Optional.of(policy));
+            // A tiny cap: a body this much larger than it would 413 on the
+            // buffered (non-passthrough) path — proving the streaming path
+            // genuinely bypasses maxBodyBytes rather than just raising it.
+            long tinyCap = 1024;
+            WebServer proxy = WebServer.builder()
+                    .port(0)
+                    .routing(new AppHandler(pipeline, new BearerAuth(Map.of()), tinyCap, false)
+                            ::route)
+                    .build()
+                    .start();
+            try {
+                var client = HttpClient.newHttpClient();
+                byte[] bigBody = new byte[16 * 1024 * 1024]; // 16 MiB >> the 1 KiB cap
+                java.util.Arrays.fill(bigBody, (byte) 'x');
+                var req = HttpRequest.newBuilder(
+                                URI.create("http://localhost:" + proxy.port()
+                                        + "/legacy-orders/_bulk"))
+                        .POST(HttpRequest.BodyPublishers.ofByteArray(bigBody))
+                        .header("x-tenant", "acme")
+                        .build();
+                var resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+
+                assertThat(resp.statusCode()).isEqualTo(200);
+                assertThat(seenLength.get()).isEqualTo((long) bigBody.length);
+            } finally {
+                proxy.stop();
+            }
+        } finally {
+            upstream.stop();
+        }
+    }
+
+    @Test
     void theDenyListStillAppliesOnAPassthroughForwardedRequest() throws Exception {
         var seenAuth = new AtomicReference<String>();
         var seenTenant = new AtomicReference<String>();

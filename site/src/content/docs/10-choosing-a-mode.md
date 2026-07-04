@@ -23,8 +23,16 @@ your auth/TLS/pooling/observability. Add `osproxy.passthrough-indices` to
 run *both at once*: legacy indices pass through untouched while onboarded
 indices stay tenant-isolated, on the same instance. The match is
 index-prefix based, evaluated before tenancy resolution
-(`Pipeline.handle`'s first check), and fail-closed — an index that doesn't
-match a configured prefix keeps full tenancy, never the other way around.
+(`AppHandler.handle`'s first check, before any body is read), and
+fail-closed — an index that doesn't match a configured prefix keeps full
+tenancy, never the other way around.
+
+A passthrough-matched request is also the one case that **streams both
+directions**: the client body is piped straight to the upstream and the
+response piped straight back, so it is not bound by `osproxy.max-body-bytes`
+at all — see [Performance](/osproxy-java/11-performance/) for a measured
+proof (a 16 MiB body through a 1 KiB-capped proxy). Every tenanted endpoint
+still buffers up to the cap, since those paths parse and rewrite the body.
 
 ## Sync vs async writes
 

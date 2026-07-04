@@ -1,6 +1,7 @@
 package io.osproxy.sink;
 
 import io.osproxy.core.Target;
+import java.io.InputStream;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -73,6 +74,45 @@ public interface Reader {
         throw new SinkException(
                 io.osproxy.core.ErrorCode.UNSUPPORTED_ENDPOINT,
                 "this reader does not support verbatim forwarding");
+    }
+
+    /**
+     * A live upstream response for {@link #forwardStreaming}: the status and
+     * an open {@link InputStream} over the response body, never buffered.
+     * {@link #close} releases the underlying connection; callers must close
+     * it (try-with-resources) once they are done reading {@link #body}.
+     */
+    record StreamedResponse(int status, InputStream body, AutoCloseable connection)
+            implements AutoCloseable {
+        @Override
+        public void close() {
+            try {
+                connection.close();
+            } catch (RuntimeException e) {
+                throw e;
+            } catch (Exception e) {
+                throw new java.io.UncheckedIOException(
+                        "closing the upstream connection", new java.io.IOException(e));
+            }
+        }
+    }
+
+    /**
+     * The streaming twin of {@link #forward}: method, path, query, and
+     * headers go upstream as-is, but the request body is piped straight
+     * from {@code requestBody} and the response body is handed back live,
+     * so neither direction is ever materialized as a byte array — the
+     * primitive a tenant-agnostic passthrough proxy needs to relay a body
+     * of any size without a memory cap. Default implementations refuse: a
+     * reader that has not wired streaming forwarding fails closed.
+     */
+    default StreamedResponse forwardStreaming(
+            Target target, io.osproxy.spi.RequestCtx.HttpMethod method, String path,
+            String query, InputStream requestBody, List<Map.Entry<String, String>> extraHeaders)
+            throws SinkException {
+        throw new SinkException(
+                io.osproxy.core.ErrorCode.UNSUPPORTED_ENDPOINT,
+                "this reader does not support streaming verbatim forwarding");
     }
 
     private static SinkException cursorsUnsupported() {

@@ -77,4 +77,10 @@ public record PassthroughPolicy(ClusterId cluster, Optional<String> endpoint, Li
     public boolean matches(RequestCtx ctx) {
         return matchesIndex(ctx.logicalIndex().orElse(""));
     }
+
+    /** The sink target a matching request forwards to. */
+    public io.osproxy.core.Target target() {
+        return new io.osproxy.core.Target(
+                cluster, new io.osproxy.core.IndexName("passthrough"), endpoint);
+    }
 }

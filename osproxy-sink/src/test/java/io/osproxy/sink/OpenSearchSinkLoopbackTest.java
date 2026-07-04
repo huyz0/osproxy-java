@@ -218,4 +218,41 @@ class OpenSearchSinkLoopbackTest {
         sink.get(target, "acme:1", Optional.empty());
         assertThat(SEEN.poll().forwardedTestHeader()).isEmpty();
     }
+
+    @Test
+    void forwardStreamingPipesTheRequestAndResponseBodiesVerbatim() throws Exception {
+        SEEN.clear();
+        byte[] payload = "{\"raw\":true}".getBytes(StandardCharsets.UTF_8);
+        try (var streamed = sink.forwardStreaming(
+                target, io.osproxy.spi.RequestCtx.HttpMethod.PUT,
+                "/legacy-orders/_doc/1", "refresh=true",
+                new java.io.ByteArrayInputStream(payload),
+                List.of(Map.entry("x-forwarded-test", "streamed")))) {
+            assertThat(streamed.status()).isEqualTo(200);
+            byte[] responseBody = streamed.body().readAllBytes();
+            assertThat(new String(responseBody, StandardCharsets.UTF_8)).contains("\"result\":\"ok\"");
+        }
+
+        Seen seen = SEEN.poll();
+        assertThat(seen.method()).isEqualTo("PUT");
+        assertThat(seen.path()).contains("/legacy-orders/_doc/1").contains("refresh=true");
+        assertThat(seen.body()).isEqualTo("{\"raw\":true}");
+        assertThat(seen.forwardedTestHeader()).isEqualTo("streamed");
+    }
+
+    @Test
+    void forwardStreamingHandlesALargeBodyWithoutTruncation() throws Exception {
+        SEEN.clear();
+        // Large enough that a buggy fixed-size buffer would truncate it —
+        // this is a functional check (correctness), not a memory-usage proof.
+        byte[] big = new byte[8 * 1024 * 1024];
+        java.util.Arrays.fill(big, (byte) 'a');
+        try (var streamed = sink.forwardStreaming(
+                target, io.osproxy.spi.RequestCtx.HttpMethod.POST,
+                "/legacy-orders/_bulk", "", new java.io.ByteArrayInputStream(big), List.of())) {
+            assertThat(streamed.status()).isEqualTo(200);
+            streamed.body().readAllBytes();
+        }
+        assertThat(SEEN.poll().body()).hasSize(big.length);
+    }
 }

@@ -198,6 +198,18 @@ public final class AppHandler {
             return;
         }
 
+        // Tenant-agnostic passthrough gets a true streaming path: neither
+        // direction is ever buffered as a byte[], so a passthrough request
+        // is not bound by maxBodyBytes at all — the whole point of streaming
+        // is escaping that cap for legitimately large bodies. Checked before
+        // any buffering happens, using only the classification already done.
+        Optional<io.osproxy.engine.PassthroughPolicy> passthrough = pipeline.passthroughPolicy()
+                .filter(p -> p.matchesIndex(classified.logicalIndex().orElse("")));
+        if (passthrough.isPresent()) {
+            streamPassthrough(req, res, classified, method.get(), principal.get(), passthrough.get());
+            return;
+        }
+
         // Bound the working set before buffering. A declared over-cap length
         // refuses immediately; a chunked body (no Content-Length) is read
         // incrementally and cut off the moment it crosses the cap, so the
@@ -248,6 +260,42 @@ public final class AppHandler {
                         ctx.method().name(), path, headers, body,
                         out.status(), out.body())));
         send(res, out);
+    }
+
+    /**
+     * Forwards a passthrough-matched request with neither direction ever
+     * buffered: the client's request body is piped straight to the upstream
+     * as it arrives, and the upstream's response is piped straight back —
+     * {@link io.osproxy.sink.Reader#forwardStreaming} does the same for the
+     * sink side. Credentials and captured bytes never enter this path
+     * (capture and body-based redaction need the bytes, which streaming
+     * deliberately never materializes); that is the trade a passthrough
+     * deployment makes for handling arbitrarily large bodies.
+     */
+    private void streamPassthrough(
+            ServerRequest req, ServerResponse res, Classify.Classified classified,
+            RequestCtx.HttpMethod method, Principal principal,
+            io.osproxy.engine.PassthroughPolicy policy) {
+        long started = System.nanoTime();
+        String requestId = java.util.HexFormat.of().formatHex(randomBytes(8));
+        try (java.io.InputStream reqBody = req.content().hasEntity()
+                ? req.content().inputStream() : java.io.InputStream.nullInputStream()) {
+            try (var streamed = pipeline.reader().forwardStreaming(
+                    policy.target(), method, req.path().rawPath(), req.query().rawValue(),
+                    reqBody, List.of())) {
+                res.status(Status.create(streamed.status()))
+                        .header(HeaderNames.create(REQUEST_ID_HEADER), requestId);
+                try (var out = res.outputStream()) {
+                    streamed.body().transferTo(out);
+                }
+                recordCompletion(requestId, classified, method, principal,
+                        streamed.status(), Optional.empty(), System.nanoTime() - started);
+            }
+        } catch (Exception e) {
+            if (!res.isSent()) {
+                send(res, PipelineResponse.error(ErrorCode.UPSTREAM_FAILED));
+            }
+        }
     }
 
     /** Publish (POST) / introspect (GET) the directive set, token-gated. */
@@ -326,19 +374,35 @@ public final class AppHandler {
         Optional<String> errorCode = out.status() >= 400
                 ? extractErrorCode(out.body())
                 : Optional.empty();
+        recordCompletion(requestId, ctx.endpoint(), ctx.method().name(), ctx.logicalIndex(),
+                ctx.principal(), out.status(), errorCode, durationNanos);
+    }
+
+    /** Overload for a streaming path that never built a {@link Classify.Classified}-free doc. */
+    private void recordCompletion(
+            String requestId, Classify.Classified classified, RequestCtx.HttpMethod method,
+            Principal principal, int status, Optional<String> errorCode, long durationNanos) {
+        recordCompletion(requestId, classified.endpoint(), method.name(),
+                classified.logicalIndex(), principal, status, errorCode, durationNanos);
+    }
+
+    private void recordCompletion(
+            String requestId, io.osproxy.core.EndpointKind endpoint, String methodName,
+            Optional<String> logicalIndex, Principal principal, int status,
+            Optional<String> errorCode, long durationNanos) {
         var doc = new io.osproxy.observe.ExplainDoc(
                 requestId,
                 io.osproxy.core.Tracing.CURRENT.get().traceId(),
-                ctx.endpoint(),
-                ctx.method().name(),
-                out.status(),
+                endpoint,
+                methodName,
+                status,
                 errorCode,
                 durationNanos);
         observability.record(doc, new io.osproxy.observe.Directive.RequestAttrs(
-                ctx.principal().attribute("tenant").orElse(""),
-                ctx.logicalIndex(),
-                ctx.endpoint(),
-                ctx.principal().id()));
+                principal.attribute("tenant").orElse(""),
+                logicalIndex,
+                endpoint,
+                principal.id()));
         if (observability.exporter().enabled()) {
             observability.exporter().export(
                     doc,

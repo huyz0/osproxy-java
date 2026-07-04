@@ -203,6 +203,40 @@ public final class OpenSearchSink implements Sink, Reader {
             String query, byte[] body, java.util.List<Map.Entry<String, String>> extraHeaders)
             throws SinkException {
         WebClient client = client(target);
+        return request(target, () -> {
+            var req = forwardRequest(client, method, path, query, extraHeaders);
+            return body.length == 0 ? req.request() : req.submit(body);
+        });
+    }
+
+    @Override
+    public StreamedResponse forwardStreaming(
+            Target target, io.osproxy.spi.RequestCtx.HttpMethod method, String path,
+            String query, java.io.InputStream requestBody,
+            java.util.List<Map.Entry<String, String>> extraHeaders)
+            throws SinkException {
+        WebClient client = client(target);
+        var req = forwardRequest(client, method, path, query, extraHeaders);
+        try {
+            // Piped straight through: this handler runs on the calling
+            // (virtual) thread as the request is written, so no intermediate
+            // buffer ever holds the whole body.
+            HttpClientResponse response = req.outputStream(os -> {
+                requestBody.transferTo(os);
+                os.close();
+            });
+            breaker(target).onSuccess();
+            return new StreamedResponse(response.status().code(), response.inputStream(), response);
+        } catch (RuntimeException e) {
+            breaker(target).onFailure();
+            throw new SinkException(ErrorCode.UPSTREAM_FAILED, "upstream forward failed", e);
+        }
+    }
+
+    /** Builds the shared verbatim-forward request (method/path/query/headers/trace). */
+    private static io.helidon.webclient.api.HttpClientRequest forwardRequest(
+            WebClient client, io.osproxy.spi.RequestCtx.HttpMethod method, String path,
+            String query, java.util.List<Map.Entry<String, String>> extraHeaders) {
         io.helidon.http.Method helidonMethod = switch (method) {
             case GET -> io.helidon.http.Method.GET;
             case PUT -> io.helidon.http.Method.PUT;
@@ -210,21 +244,19 @@ public final class OpenSearchSink implements Sink, Reader {
             case DELETE -> io.helidon.http.Method.DELETE;
             case HEAD -> io.helidon.http.Method.HEAD;
         };
-        return request(target, () -> {
-            var req = traced(client.method(helidonMethod)).path(path);
-            if (query != null && !query.isEmpty()) {
-                for (String pair : query.split("&")) {
-                    int eq = pair.indexOf('=');
-                    if (eq >= 0) {
-                        req = req.queryParam(pair.substring(0, eq), pair.substring(eq + 1));
-                    }
+        var req = traced(client.method(helidonMethod)).path(path);
+        if (query != null && !query.isEmpty()) {
+            for (String pair : query.split("&")) {
+                int eq = pair.indexOf('=');
+                if (eq >= 0) {
+                    req = req.queryParam(pair.substring(0, eq), pair.substring(eq + 1));
                 }
             }
-            for (Map.Entry<String, String> header : extraHeaders) {
-                req = req.header(io.helidon.http.HeaderNames.create(header.getKey()), header.getValue());
-            }
-            return body.length == 0 ? req.request() : req.submit(body);
-        });
+        }
+        for (Map.Entry<String, String> header : extraHeaders) {
+            req = req.header(io.helidon.http.HeaderNames.create(header.getKey()), header.getValue());
+        }
+        return req;
     }
 
     private interface Call {
