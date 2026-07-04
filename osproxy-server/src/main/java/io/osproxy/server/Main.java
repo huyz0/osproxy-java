@@ -29,15 +29,29 @@ public final class Main {
 
     /** Wires the reference stack and starts the server (tests call this too). */
     public static WebServer start(ProxyConfig cfg) {
+        if (cfg.fips()) {
+            CryptoPosture.requireFipsProvider();
+        }
         ClusterId cluster = new ClusterId("primary");
         OpenSearchSink sink = new OpenSearchSink(Map.of(cluster, cfg.upstream()));
         Pipeline pipeline = new Pipeline(
                 new TenancyRouter(new ReferenceTenancy(cluster, new IndexName(cfg.index()))),
                 sink, sink,
                 cfg.cursorAffinityKey().map(HmacCursorCodec::new).map(c -> (io.osproxy.engine.CursorCodec) c));
-        Observability observability = new Observability(
-                512,
-                cfg.logRequests() ? java.util.Optional.of(System.out) : java.util.Optional.empty());
+        var requestLog = cfg.logRequests()
+                ? java.util.Optional.of(System.out) : java.util.Optional.<java.io.PrintStream>empty();
+        var baseline = cfg.logRequests()
+                ? io.osproxy.observe.DiagLevel.VERBOSE : io.osproxy.observe.DiagLevel.SHAPE;
+        Observability observability = cfg.directivesUrl()
+                .map(url -> new Observability(
+                        512, requestLog,
+                        new PollingDirectiveStore(
+                                url, baseline, new io.osproxy.core.SystemClock(),
+                                cfg.directivesPollSeconds() * 1000L),
+                        new io.osproxy.core.SystemClock()))
+                .orElseGet(() -> new Observability(512, requestLog));
+        cfg.otlpEndpoint().ifPresent(endpoint -> observability.withExporter(
+                new io.osproxy.otlp.OtlpHttpExporter(endpoint, cfg.serviceName())));
         AppHandler handler = new AppHandler(
                 pipeline, new BearerAuth(cfg.tokens()),
                 cfg.maxBodyBytes(), cfg.requireTlsForMutation(), observability);
@@ -56,9 +70,13 @@ public final class Main {
                         .key(Resource.create(java.nio.file.Path.of(settings.keyPath())))
                         .certChain(Resource.create(java.nio.file.Path.of(settings.certPath()))))
                 .build();
+        // Always pinned to the FIPS-approved set (harmless off-FIPS,
+        // mandatory on): TLS 1.2/1.3, AES-GCM only.
         var tls = Tls.builder()
                 .privateKey(keys.privateKey().orElseThrow())
-                .privateKeyCertChain(keys.certChain());
+                .privateKeyCertChain(keys.certChain())
+                .enabledProtocols(CryptoPosture.APPROVED_PROTOCOLS)
+                .enabledCipherSuites(CryptoPosture.APPROVED_SUITES);
         settings.clientCaPath().ifPresent(ca -> tls
                 .trust(Keys.builder()
                         .pem(pem -> pem.certificates(

@@ -35,11 +35,13 @@ class ModuleDagTest {
                 .layer("config").definedBy("io.osproxy.config..")
                 .layer("observe").definedBy("io.osproxy.observe..")
                 .layer("capture").definedBy("io.osproxy.capture..")
+                .layer("otlp").definedBy("io.osproxy.otlp..")
                 .layer("server").definedBy("io.osproxy.server..")
                 .whereLayer("server").mayNotBeAccessedByAnyLayer()
                 .whereLayer("config").mayOnlyBeAccessedByLayers("server")
-                .whereLayer("observe").mayOnlyBeAccessedByLayers("server")
+                .whereLayer("observe").mayOnlyBeAccessedByLayers("otlp", "server")
                 .whereLayer("capture").mayOnlyBeAccessedByLayers("server")
+                .whereLayer("otlp").mayOnlyBeAccessedByLayers("server")
                 .whereLayer("engine").mayOnlyBeAccessedByLayers("server")
                 .whereLayer("sink").mayOnlyBeAccessedByLayers("engine", "server")
                 .whereLayer("tenancy").mayOnlyBeAccessedByLayers("engine", "server")
@@ -48,7 +50,7 @@ class ModuleDagTest {
                         "rewrite", "tenancy", "sink", "engine", "server")
                 .whereLayer("core").mayOnlyBeAccessedByLayers(
                         "spi", "rewrite", "tenancy", "sink", "engine", "config",
-                        "observe", "capture", "server")
+                        "observe", "capture", "otlp", "server")
                 .check(classes);
     }
 }

@@ -26,6 +26,7 @@ include(
     "osproxy-sink",
     "osproxy-observe",
     "osproxy-capture",
+    "osproxy-otlp",
     "osproxy-engine",
     "osproxy-config",
     "osproxy-server",

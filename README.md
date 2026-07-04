@@ -44,11 +44,25 @@ The port covers the Rust project's M1–M7 arc:
 - **Capture & async writes**: traffic-capture and acked-producer seams
   (broker-free by default) and per-request async write mode
   (`x-osproxy-write-mode: async` → honest `202 {status, op_id}`).
+- **FIPS posture** (M6): the TLS listener is always pinned to the approved
+  set (TLS 1.2/1.3, AES-GCM only, live-negotiation-tested), and
+  `osproxy.fips: true` refuses to boot unless a FIPS-validated JCE provider
+  (e.g. BouncyCastle FIPS) is installed — the validated module is a
+  deployment artifact, never bundled.
+- **OTLP export**: `osproxy.otlp-endpoint` turns on fire-and-forget span
+  export (`osproxy-otlp`): one shape-only SERVER span per request POSTed to
+  `{endpoint}/v1/traces`, bounded in-flight budget that sheds spans behind a
+  slow collector, never on the request path.
+- **Fleet directives**: `osproxy.directives-url` polls the directive set
+  from any HTTP source (an etcd gateway, a config service, an object store)
+  with fail-closed decoding and keep-last-good semantics — every instance
+  polling the same URL converges without restarts.
 
-Everything is shape-only on the wire: error bodies, metrics, explain docs and
-logs never carry tenant values. Deferred: FIPS crypto posture, OTLP export,
-a distributed directive/placement store (the seams exist; the backends are
-deployment choices).
+Everything is shape-only on the wire: error bodies, metrics, explain docs,
+spans and logs never carry tenant values. Still external by design: the
+FIPS-validated crypto module itself, a real Kafka producer behind the
+AckProducer seam, and a distributed placement store (the PlacementTable +
+MigrationControl seams are where one plugs in).
 
 ## Build and test
 

@@ -9,6 +9,7 @@ jqwik = "1.9.3"
 assertj = "3.27.3"
 archunit = "1.4.1"
 testcontainers = "1.21.3"
+awaitility = "4.3.0"
 
 [libraries]
 helidon-webserver = { module = "io.helidon.webserver:helidon-webserver", version.ref = "helidon" }
@@ -24,3 +25,4 @@ assertj = { module = "org.assertj:assertj-core", version.ref = "assertj" }
 archunit = { module = "com.tngtech.archunit:archunit-junit5", version.ref = "archunit" }
 testcontainers = { module = "org.testcontainers:testcontainers", version.ref = "testcontainers" }
 testcontainers-junit = { module = "org.testcontainers:junit-jupiter", version.ref = "testcontainers" }
+awaitility = { module = "org.awaitility:awaitility", version.ref = "awaitility" }

@@ -23,6 +23,7 @@ dependencies {
     implementation(project(":osproxy-config"))
     implementation(project(":osproxy-observe"))
     implementation(project(":osproxy-capture"))
+    implementation(project(":osproxy-otlp"))
     implementation(project(":osproxy-rewrite"))
     implementation(libs.helidon.webserver)
     implementation(libs.jackson.databind)

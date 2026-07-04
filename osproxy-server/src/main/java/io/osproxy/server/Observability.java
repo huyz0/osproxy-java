@@ -24,6 +24,7 @@ public final class Observability {
     private final Optional<PrintStream> requestLog;
     private final DirectiveSet.Store directives;
     private final Clock clock;
+    private io.osproxy.observe.SpanExporter exporter = io.osproxy.observe.SpanExporter.NOOP;
 
     public Observability(int explainCapacity, Optional<PrintStream> requestLog) {
         this(explainCapacity, requestLog,
@@ -39,6 +40,17 @@ public final class Observability {
         this.requestLog = requestLog;
         this.directives = directives;
         this.clock = clock;
+    }
+
+    /** Enables span export (default: off, all export cost skipped). */
+    public Observability withExporter(io.osproxy.observe.SpanExporter exporter) {
+        this.exporter = exporter;
+        return this;
+    }
+
+    /** The exporter (the handler feeds it when enabled). */
+    public io.osproxy.observe.SpanExporter exporter() {
+        return exporter;
     }
 
     /** The directive store (the admin endpoint publishes into it). */

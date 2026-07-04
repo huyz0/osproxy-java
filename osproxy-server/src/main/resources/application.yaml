@@ -6,3 +6,8 @@ osproxy:
   index: "shared"
   # tokens:
   #   some-secret-token: "acme"
+  # cursor-affinity-key: "some-long-random-key"
+  # directive-admin-token: "some-admin-token"
+  # otlp-endpoint: "http://localhost:4318"
+  # directives-url: "http://config-service/osproxy/directives"
+  # fips: true

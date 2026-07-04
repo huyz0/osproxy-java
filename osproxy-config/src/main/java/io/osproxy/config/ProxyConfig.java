@@ -25,6 +25,12 @@ import java.util.Optional;
  * @param logRequests emit one shape-only JSON line per request to stdout
  * @param directiveAdminToken bearer token for the directive admin endpoint;
  *     absent means the endpoint does not exist (fail closed)
+ * @param fips refuse to boot unless a FIPS-validated JCE provider is engaged
+ * @param otlpEndpoint OTLP collector base URL; absent means no export
+ * @param serviceName the service name on exported spans
+ * @param directivesUrl HTTP source polled for the fleet directive set;
+ *     absent means directives are instance-local (the admin endpoint)
+ * @param directivesPollSeconds the poll interval for {@code directivesUrl}
  */
 public record ProxyConfig(
         int port,
@@ -36,7 +42,12 @@ public record ProxyConfig(
         Optional<TlsSettings> tls,
         Optional<String> cursorAffinityKey,
         boolean logRequests,
-        Optional<String> directiveAdminToken) {
+        Optional<String> directiveAdminToken,
+        boolean fips,
+        Optional<String> otlpEndpoint,
+        String serviceName,
+        Optional<String> directivesUrl,
+        int directivesPollSeconds) {
 
     /** PEM paths for the TLS listener; {@code clientCaPath} enables mTLS. */
     public record TlsSettings(String certPath, String keyPath, Optional<String> clientCaPath) {
@@ -78,7 +89,31 @@ public record ProxyConfig(
             Optional<String> cursorAffinityKey, boolean logRequests) {
         this(port, upstream, index, tokens,
                 maxBodyBytes, requireTlsForMutation, tls, cursorAffinityKey, logRequests,
-                Optional.empty());
+                Optional.empty(), false);
+    }
+
+    /** The pre-fips form (tests). */
+    public ProxyConfig(
+            int port, String upstream, String index, Map<String, String> tokens,
+            long maxBodyBytes, boolean requireTlsForMutation, Optional<TlsSettings> tls,
+            Optional<String> cursorAffinityKey, boolean logRequests,
+            Optional<String> directiveAdminToken) {
+        this(port, upstream, index, tokens,
+                maxBodyBytes, requireTlsForMutation, tls, cursorAffinityKey, logRequests,
+                directiveAdminToken, false, Optional.empty(), "osproxy",
+                Optional.empty(), 10);
+    }
+
+    /** The pre-otlp form (tests). */
+    public ProxyConfig(
+            int port, String upstream, String index, Map<String, String> tokens,
+            long maxBodyBytes, boolean requireTlsForMutation, Optional<TlsSettings> tls,
+            Optional<String> cursorAffinityKey, boolean logRequests,
+            Optional<String> directiveAdminToken, boolean fips) {
+        this(port, upstream, index, tokens,
+                maxBodyBytes, requireTlsForMutation, tls, cursorAffinityKey, logRequests,
+                directiveAdminToken, fips, Optional.empty(), "osproxy",
+                Optional.empty(), 10);
     }
 
     /** The default request-body cap (32 MiB), matching the Rust proxy. */
@@ -138,6 +173,11 @@ public record ProxyConfig(
                 tls,
                 root.get("cursor-affinity-key").asString().asOptional(),
                 root.get("log-requests").asBoolean().orElse(false),
-                root.get("directive-admin-token").asString().asOptional());
+                root.get("directive-admin-token").asString().asOptional(),
+                root.get("fips").asBoolean().orElse(false),
+                root.get("otlp-endpoint").asString().asOptional(),
+                root.get("service-name").asString().orElse("osproxy"),
+                root.get("directives-url").asString().asOptional(),
+                root.get("directives-poll-seconds").asInt().orElse(10));
     }
 }

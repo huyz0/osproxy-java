@@ -275,19 +275,24 @@ public final class AppHandler {
         Optional<String> errorCode = out.status() >= 400
                 ? extractErrorCode(out.body())
                 : Optional.empty();
-        observability.record(
-                new io.osproxy.observe.ExplainDoc(
-                        requestId,
-                        io.osproxy.core.Tracing.CURRENT.get().traceId(),
-                        ctx.endpoint(),
-                        ctx.method().name(),
-                        out.status(),
-                        errorCode,
-                        durationNanos),
-                new io.osproxy.observe.Directive.RequestAttrs(
-                        ctx.principal().attribute("tenant").orElse(""),
-                        ctx.logicalIndex(),
-                        ctx.endpoint()));
+        var doc = new io.osproxy.observe.ExplainDoc(
+                requestId,
+                io.osproxy.core.Tracing.CURRENT.get().traceId(),
+                ctx.endpoint(),
+                ctx.method().name(),
+                out.status(),
+                errorCode,
+                durationNanos);
+        observability.record(doc, new io.osproxy.observe.Directive.RequestAttrs(
+                ctx.principal().attribute("tenant").orElse(""),
+                ctx.logicalIndex(),
+                ctx.endpoint()));
+        if (observability.exporter().enabled()) {
+            observability.exporter().export(
+                    doc,
+                    io.osproxy.core.Tracing.CURRENT.get().spanId(),
+                    System.currentTimeMillis() * 1_000_000L);
+        }
     }
 
     /** Pulls the wire code out of a shape-only error body. */
