@@ -26,7 +26,8 @@ public final class DirectivesApi {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Set<String> DIRECTIVE_KEYS = Set.of(
-            "id", "level", "tenant", "index", "endpoint", "sample_per_mille", "ttl_seconds");
+            "id", "level", "tenant", "index", "endpoint", "sample_per_mille", "ring_buffer",
+            "ttl_seconds");
 
     private final Clock clock;
 
@@ -108,6 +109,7 @@ public final class DirectivesApi {
                 text(obj, "index"),
                 endpoint,
                 obj.path("sample_per_mille").asInt(1000),
+                obj.path("ring_buffer").asBoolean(false),
                 clock.monotonicNanos() + ttlSeconds * 1_000_000_000L);
     }
 
@@ -125,6 +127,7 @@ public final class DirectivesApi {
             d.index().ifPresent(i -> item.put("index", i));
             d.endpoint().ifPresent(e -> item.put("endpoint", e.wireName()));
             item.put("sample_per_mille", d.samplePerMille());
+            item.put("ring_buffer", d.ringBuffer());
             // Remaining ttl, never the host clock (no wall time leaks).
             item.put("ttl_seconds", Math.max(0, (d.expiresAtNanos() - now) / 1_000_000_000L));
         }

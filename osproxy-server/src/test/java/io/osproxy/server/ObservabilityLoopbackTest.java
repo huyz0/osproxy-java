@@ -153,4 +153,67 @@ class ObservabilityLoopbackTest {
     void outsideARequestNoTraceIsBound() {
         assertThat(Tracing.CURRENT.isBound()).isFalse();
     }
+
+    @Test
+    void breakGlassCapturesOnlyWhenARingBufferDirectiveMatches() throws Exception {
+        var observability = new Observability(16, Optional.empty());
+        MemorySink sink = new MemorySink();
+        Pipeline pipeline = new Pipeline(
+                new TenancyRouter(new ReferenceTenancy(
+                        new ClusterId("primary"), new IndexName("shared"))),
+                sink, sink);
+        WebServer server = WebServer.builder()
+                .port(0)
+                .routing(new AppHandler(
+                                pipeline, new BearerAuth(Map.of()),
+                                1 << 20, false, observability)
+                        .withAdminToken("secret")::route)
+                .build()
+                .start();
+        try {
+            var client = HttpClient.newHttpClient();
+            String base = "http://localhost:" + server.port();
+
+            // Before any directive: the tape stays empty even after a request.
+            client.send(HttpRequest.newBuilder(URI.create(base + "/orders/_doc/1"))
+                            .PUT(HttpRequest.BodyPublishers.ofString("{}"))
+                            .header("x-tenant", "acme").build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertThat(fetchBreakGlass(client, base)).isEqualTo("[]");
+
+            // Publish a ring_buffer directive targeting this tenant.
+            String publish = """
+                    {"directives":[
+                      {"id":"forensic-acme","level":"shape","tenant":"acme",
+                       "ring_buffer":true,"ttl_seconds":60}
+                    ]}
+                    """;
+            var publishResp = client.send(
+                    HttpRequest.newBuilder(URI.create(base + AppHandler.ADMIN_DIRECTIVES_PATH))
+                            .POST(HttpRequest.BodyPublishers.ofString(publish))
+                            .header("authorization", "Bearer secret")
+                            .build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertThat(publishResp.statusCode()).isEqualTo(200);
+
+            client.send(HttpRequest.newBuilder(URI.create(base + "/orders/_doc/2"))
+                            .PUT(HttpRequest.BodyPublishers.ofString("{}"))
+                            .header("x-tenant", "acme").build(),
+                    HttpResponse.BodyHandlers.ofString());
+
+            String tape = fetchBreakGlass(client, base);
+            assertThat(tape).contains("\"endpoint\":\"ingest-doc\"");
+        } finally {
+            server.stop();
+        }
+    }
+
+    private static String fetchBreakGlass(HttpClient client, String base) throws Exception {
+        var resp = client.send(
+                HttpRequest.newBuilder(URI.create(base + AppHandler.BREAKGLASS_PATH))
+                        .GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(resp.statusCode()).isEqualTo(200);
+        return resp.body();
+    }
 }

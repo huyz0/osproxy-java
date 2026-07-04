@@ -2,6 +2,7 @@ package io.osproxy.server;
 
 import io.osproxy.core.Clock;
 import io.osproxy.core.SystemClock;
+import io.osproxy.observe.BreakGlassBuffer;
 import io.osproxy.observe.DiagLevel;
 import io.osproxy.observe.Directive;
 import io.osproxy.observe.DirectiveSet;
@@ -21,6 +22,7 @@ public final class Observability {
 
     private final Metrics metrics = new Metrics();
     private final ExplainStore explainStore;
+    private final BreakGlassBuffer breakGlass = new BreakGlassBuffer(256);
     private final Optional<PrintStream> requestLog;
     private final DirectiveSet.Store directives;
     private final Clock clock;
@@ -65,13 +67,20 @@ public final class Observability {
     /** Records one completed request at the directive-effective level. */
     public void record(ExplainDoc doc, Directive.RequestAttrs attrs) {
         metrics.record(doc.status());
-        DiagLevel level = directives.load()
-                .evaluate(attrs, doc.requestId(), clock.monotonicNanos());
+        long now = clock.monotonicNanos();
+        DirectiveSet snapshot = directives.load();
+        DiagLevel level = snapshot.evaluate(attrs, doc.requestId(), now);
         if (level.ordinal() >= DiagLevel.SHAPE.ordinal()) {
             explainStore.record(doc);
         }
         if (level == DiagLevel.VERBOSE) {
             requestLog.ifPresent(out -> out.println(doc.toJson()));
+        }
+        // Break-glass: capture the explanation when a ring_buffer directive
+        // selected this request. Off by default, so this stays empty until an
+        // operator flips it on.
+        if (snapshot.wantsRingBuffer(attrs, doc.requestId(), now)) {
+            breakGlass.capture(doc.toJson());
         }
     }
 
@@ -81,5 +90,11 @@ public final class Observability {
 
     public ExplainStore explainStore() {
         return explainStore;
+    }
+
+    /** The break-glass tape, the explanations captured while a ring_buffer
+     * directive applied. */
+    public BreakGlassBuffer breakGlass() {
+        return breakGlass;
     }
 }

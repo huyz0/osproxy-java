@@ -42,7 +42,11 @@ The port covers the Rust project's M1–M7 arc:
   at the sink choke point), `GET /_osproxy/metrics`, per-request explain docs
   at `GET /_osproxy/explain/<id>`, optional JSON request logs, and a
   fail-closed diagnostics-directive plane published live through
-  `POST /_osproxy/admin/directives`.
+  `POST /_osproxy/admin/directives`. A `ring_buffer: true` directive also
+  turns on the break-glass tape: a bounded, in-order buffer of recent
+  explanations readable at `GET /_osproxy/breakglass` — for pulling the last
+  N failures of a class when the request ids aren't known up front, off (and
+  free) until an operator flips it on.
 - **Capture & async writes**: traffic-capture and acked-producer seams,
   plus the real Kafka producer (`osproxy.fanout.bootstrap-servers` +
   `fanout.topic`, `acks=all`, idempotent) behind per-request async write

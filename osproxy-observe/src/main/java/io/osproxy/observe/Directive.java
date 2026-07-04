@@ -16,6 +16,9 @@ import java.util.Optional;
  * @param index match only this logical index, when present
  * @param endpoint match only this endpoint kind, when present
  * @param samplePerMille 0..1000; 1000 = every matching request
+ * @param ringBuffer when true, a matching request's explanation is also
+ *     captured into the break-glass tape (operator turns this on
+ *     deliberately when failing ids aren't known up front)
  * @param expiresAtNanos absolute monotonic deadline (from the proxy Clock)
  */
 public record Directive(
@@ -25,6 +28,7 @@ public record Directive(
         Optional<String> index,
         Optional<EndpointKind> endpoint,
         int samplePerMille,
+        boolean ringBuffer,
         long expiresAtNanos) {
 
     public Directive {

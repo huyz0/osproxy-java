@@ -16,7 +16,7 @@ class DirectiveTest {
     private static Directive directive(
             DiagLevel level, Optional<String> tenant, int perMille, long expiresAt) {
         return new Directive(
-                "d1", level, tenant, Optional.empty(), Optional.empty(), perMille, expiresAt);
+                "d1", level, tenant, Optional.empty(), Optional.empty(), perMille, false, expiresAt);
     }
 
     @Test
@@ -42,11 +42,11 @@ class DirectiveTest {
     void endpointAndIndexTargeting() {
         var byEndpoint = new Directive(
                 "d", DiagLevel.OFF, Optional.empty(), Optional.empty(),
-                Optional.of(EndpointKind.INGEST_BULK), 1000, 100);
+                Optional.of(EndpointKind.INGEST_BULK), 1000, false, 100);
         assertThat(byEndpoint.matches(ACME_SEARCH, "r", 50)).isFalse();
         var byIndex = new Directive(
                 "d", DiagLevel.OFF, Optional.empty(), Optional.of("other"),
-                Optional.empty(), 1000, 100);
+                Optional.empty(), 1000, false, 100);
         assertThat(byIndex.matches(ACME_SEARCH, "r", 50)).isFalse();
     }
 
@@ -87,7 +87,7 @@ class DirectiveTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new Directive(
                         "", DiagLevel.OFF, Optional.empty(), Optional.empty(),
-                        Optional.empty(), 1, 1))
+                        Optional.empty(), 1, false, 1))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThat(DiagLevel.fromWireName("verbose")).isEqualTo(DiagLevel.VERBOSE);
         assertThat(DiagLevel.fromWireName("nope")).isNull();

@@ -30,6 +30,9 @@ public final class AppHandler {
     /** Prefix of the explain lookup: {@code /_osproxy/explain/<request-id>}. */
     public static final String EXPLAIN_PREFIX = "/_osproxy/explain/";
 
+    /** The break-glass tape read: recent explanations captured on demand. */
+    public static final String BREAKGLASS_PATH = "/_osproxy/breakglass";
+
     /** Echoed on every response so a client can look its request up. */
     public static final String REQUEST_ID_HEADER = "x-osproxy-request-id";
 
@@ -113,6 +116,13 @@ public final class AppHandler {
         }
         if (rawPath.equals(ADMIN_DIRECTIVES_PATH)) {
             handleAdminDirectives(req, res);
+            return;
+        }
+        if (rawPath.equals(BREAKGLASS_PATH)) {
+            List<String> tape = observability.breakGlass().snapshot();
+            res.status(Status.OK_200)
+                    .header(HeaderNames.CONTENT_TYPE, "application/json")
+                    .send("[" + String.join(",", tape) + "]");
             return;
         }
         if (rawPath.startsWith(EXPLAIN_PREFIX)) {

@@ -20,7 +20,7 @@ class DirectivesApiTest {
                 {"baseline":"off","directives":[
                   {"id":"debug-acme","level":"verbose","tenant":"acme",
                    "index":"orders","endpoint":"search",
-                   "sample_per_mille":250,"ttl_seconds":60}
+                   "sample_per_mille":250,"ring_buffer":true,"ttl_seconds":60}
                 ]}
                 """;
         DirectiveSet set = api.decode(body.getBytes());
@@ -28,6 +28,7 @@ class DirectivesApiTest {
         var d = set.directives().get(0);
         assertThat(d.tenant()).contains("acme");
         assertThat(d.endpoint()).contains(EndpointKind.SEARCH);
+        assertThat(d.ringBuffer()).isTrue();
         assertThat(d.expiresAtNanos()).isEqualTo(60_000_000_000L);
 
         // Introspection re-emits the publishable shape; decoding it again
@@ -37,6 +38,7 @@ class DirectivesApiTest {
         assertThat(again.baseline()).isEqualTo(DiagLevel.OFF);
         assertThat(again.directives().get(0).id()).isEqualTo("debug-acme");
         assertThat(again.directives().get(0).samplePerMille()).isEqualTo(250);
+        assertThat(again.directives().get(0).ringBuffer()).isTrue();
     }
 
     @Test

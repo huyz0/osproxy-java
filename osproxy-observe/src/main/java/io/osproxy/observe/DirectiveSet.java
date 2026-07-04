@@ -33,6 +33,16 @@ public record DirectiveSet(DiagLevel baseline, List<Directive> directives) {
         return effective != null ? effective : baseline;
     }
 
+    /** Whether any matching, unexpired directive wants break-glass capture. */
+    public boolean wantsRingBuffer(Directive.RequestAttrs attrs, String requestId, long nowNanos) {
+        for (Directive directive : directives) {
+            if (directive.ringBuffer() && directive.matches(attrs, requestId, nowNanos)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * The store seam: the server polls {@code load()} per request, so a
      * fleet-wide publish takes effect without a restart. Implementations
