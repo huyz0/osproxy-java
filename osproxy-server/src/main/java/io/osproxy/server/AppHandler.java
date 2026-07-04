@@ -92,7 +92,8 @@ public final class AppHandler {
         RequestCtx ctx = new RequestCtx(
                 method.get(), path, classified.endpoint(),
                 classified.logicalIndex(), classified.docId(),
-                headers, body, principal.get());
+                headers, body, principal.get(),
+                req.query().rawValue());
         send(res, pipeline.handle(ctx));
     }
 

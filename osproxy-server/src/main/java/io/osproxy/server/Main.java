@@ -33,7 +33,8 @@ public final class Main {
         OpenSearchSink sink = new OpenSearchSink(Map.of(cluster, cfg.upstream()));
         Pipeline pipeline = new Pipeline(
                 new TenancyRouter(new ReferenceTenancy(cluster, new IndexName(cfg.index()))),
-                sink, sink);
+                sink, sink,
+                cfg.cursorAffinityKey().map(HmacCursorCodec::new).map(c -> (io.osproxy.engine.CursorCodec) c));
         AppHandler handler = new AppHandler(
                 pipeline, new BearerAuth(cfg.tokens()),
                 cfg.maxBodyBytes(), cfg.requireTlsForMutation());

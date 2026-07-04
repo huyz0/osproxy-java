@@ -20,6 +20,8 @@ import java.util.Optional;
  * @param requireTlsForMutation refuse body-mutating requests over cleartext
  *     (NFR-S1 in the Rust project); only meaningful when TLS is configured
  * @param tls TLS ingress, when configured
+ * @param cursorAffinityKey HMAC key sealing scroll/PIT cursor affinity;
+ *     absent means the cursor endpoints are refused fail-closed
  */
 public record ProxyConfig(
         int port,
@@ -28,7 +30,8 @@ public record ProxyConfig(
         Map<String, String> tokens,
         long maxBodyBytes,
         boolean requireTlsForMutation,
-        Optional<TlsSettings> tls) {
+        Optional<TlsSettings> tls,
+        Optional<String> cursorAffinityKey) {
 
     /** PEM paths for the TLS listener; {@code clientCaPath} enables mTLS. */
     public record TlsSettings(String certPath, String keyPath, Optional<String> clientCaPath) {
@@ -41,7 +44,16 @@ public record ProxyConfig(
 
     /** The compatibility constructor: cleartext, 32 MiB cap, no TLS gate. */
     public ProxyConfig(int port, String upstream, String index, Map<String, String> tokens) {
-        this(port, upstream, index, tokens, DEFAULT_MAX_BODY_BYTES, false, Optional.empty());
+        this(port, upstream, index, tokens,
+                DEFAULT_MAX_BODY_BYTES, false, Optional.empty(), Optional.empty());
+    }
+
+    /** The pre-cursor form (tests): everything through tls, no cursor key. */
+    public ProxyConfig(
+            int port, String upstream, String index, Map<String, String> tokens,
+            long maxBodyBytes, boolean requireTlsForMutation, Optional<TlsSettings> tls) {
+        this(port, upstream, index, tokens,
+                maxBodyBytes, requireTlsForMutation, tls, Optional.empty());
     }
 
     /** The default request-body cap (32 MiB), matching the Rust proxy. */
@@ -98,6 +110,7 @@ public record ProxyConfig(
                 tokens,
                 root.get("max-body-bytes").asLong().orElse(DEFAULT_MAX_BODY_BYTES),
                 root.get("require-tls-for-mutation").asBoolean().orElse(false),
-                tls);
+                tls,
+                root.get("cursor-affinity-key").asString().asOptional());
     }
 }

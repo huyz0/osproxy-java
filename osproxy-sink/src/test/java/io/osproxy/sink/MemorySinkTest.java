@@ -103,4 +103,41 @@ class MemorySinkTest {
     private static int count(MemorySink sink, byte[] body) throws Exception {
         return M.readTree(sink.count(T, body).body()).get("count").intValue();
     }
+
+    @Test
+    void cursorEmulationOneBatchThenEmpty() throws Exception {
+        var sink = new MemorySink();
+        sink.write(List.of(op(new DocOp.Index(
+                "a:1", "{\"m\":1}".getBytes(), Optional.empty()))));
+
+        var first = M.readTree(sink.searchScroll(T, new byte[0], "1m").body());
+        String scrollId = first.get("_scroll_id").textValue();
+        assertThat(first.at("/hits/hits")).hasSize(1);
+
+        var next = M.readTree(sink.scrollNext(
+                T, ("{\"scroll_id\":\"" + scrollId + "\"}").getBytes()).body());
+        assertThat(next.at("/hits/hits")).isEmpty();
+        assertThat(sink.scrollNext(T, "{\"scroll_id\":\"bogus\"}".getBytes()).status())
+                .isEqualTo(404);
+        assertThat(sink.scrollDelete(
+                T, ("{\"scroll_id\":\"" + scrollId + "\"}").getBytes()).ok()).isTrue();
+    }
+
+    @Test
+    void pitEmulationEchoesTheIdAndSearches() throws Exception {
+        var sink = new MemorySink();
+        sink.write(List.of(op(new DocOp.Index(
+                "a:1", "{\"m\":1}".getBytes(), Optional.empty()))));
+        var opened = M.readTree(sink.pitOpen(T, "1m").body());
+        String pit = opened.get("pit_id").textValue();
+
+        var result = M.readTree(sink.searchIndexless(
+                T, ("{\"pit\":{\"id\":\"" + pit + "\"}}").getBytes()).body());
+        assertThat(result.get("pit_id").textValue()).isEqualTo(pit);
+        assertThat(result.at("/hits/hits")).hasSize(1);
+
+        assertThat(sink.searchIndexless(T, "{}".getBytes()).ok()).isTrue();
+        assertThat(sink.pitClose(
+                T, ("{\"pit_id\":[\"" + pit + "\"]}").getBytes()).ok()).isTrue();
+    }
 }

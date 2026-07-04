@@ -18,6 +18,8 @@ import java.util.Optional;
  * @param headers parsed request headers in arrival order
  * @param body raw request body (empty array for bodyless requests)
  * @param principal the authenticated identity
+ * @param rawQuery the raw query string without {@code ?} (may be empty);
+ *     carried for endpoints whose semantics live in parameters (scroll TTLs)
  */
 public record RequestCtx(
         HttpMethod method,
@@ -27,7 +29,34 @@ public record RequestCtx(
         Optional<String> docId,
         List<Map.Entry<String, String>> headers,
         byte[] body,
-        Principal principal) {
+        Principal principal,
+        String rawQuery) {
+
+    /** The query-less form most requests use. */
+    public RequestCtx(
+            HttpMethod method,
+            String path,
+            EndpointKind endpoint,
+            Optional<String> logicalIndex,
+            Optional<String> docId,
+            List<Map.Entry<String, String>> headers,
+            byte[] body,
+            Principal principal) {
+        this(method, path, endpoint, logicalIndex, docId, headers, body, principal, "");
+    }
+
+    /** A single decoded query parameter, first occurrence. */
+    public Optional<String> queryParam(String name) {
+        for (String pair : rawQuery.split("&")) {
+            int eq = pair.indexOf('=');
+            String key = eq < 0 ? pair : pair.substring(0, eq);
+            if (key.equals(name)) {
+                return Optional.of(eq < 0 ? "" : java.net.URLDecoder.decode(
+                        pair.substring(eq + 1), java.nio.charset.StandardCharsets.UTF_8));
+            }
+        }
+        return Optional.empty();
+    }
 
     public RequestCtx {
         if (method == null || path == null || endpoint == null || principal == null) {
@@ -35,6 +64,7 @@ public record RequestCtx(
         }
         headers = List.copyOf(headers);
         body = body == null ? new byte[0] : body;
+        rawQuery = rawQuery == null ? "" : rawQuery;
     }
 
     /** Case-insensitive header lookup, first match wins. */

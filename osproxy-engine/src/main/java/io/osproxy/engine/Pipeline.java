@@ -35,12 +35,20 @@ public final class Pipeline {
     private final Sink sink;
     private final Reader reader;
     private final MultiOps multiOps;
+    private final Cursors cursors;
 
     public Pipeline(TenancyRouter router, Sink sink, Reader reader) {
+        this(router, sink, reader, Optional.empty());
+    }
+
+    /** With a cursor codec, the scroll/PIT endpoints go live. */
+    public Pipeline(
+            TenancyRouter router, Sink sink, Reader reader, Optional<CursorCodec> cursorCodec) {
         this.router = router;
         this.sink = sink;
         this.reader = reader;
         this.multiOps = new MultiOps(this);
+        this.cursors = new Cursors(this, cursorCodec);
     }
 
     TenancyRouter router() {
@@ -67,7 +75,8 @@ public final class Pipeline {
                 case INGEST_BULK -> multiOps.bulk(ctx);
                 case MULTI_GET -> multiOps.mget(ctx);
                 case MULTI_SEARCH -> multiOps.msearch(ctx);
-                case CURSOR, ADMIN, UNKNOWN ->
+                case CURSOR -> cursors.handle(ctx);
+                case ADMIN, UNKNOWN ->
                         PipelineResponse.error(ErrorCode.UNSUPPORTED_ENDPOINT);
             };
         } catch (SpiException e) {
@@ -148,6 +157,17 @@ public final class Pipeline {
 
     private PipelineResponse searchOrCount(RequestCtx ctx, boolean search)
             throws SpiException, RewriteException, SinkException {
+        if (search) {
+            // A ?scroll= search opens a cursor; a body naming a pit id is a
+            // PIT search. Both hand off to the affinity-sealing cursor path.
+            Optional<String> ttl = Cursors.scrollTtl(ctx);
+            if (ttl.isPresent()) {
+                return cursors.openScroll(ctx, ttl.get());
+            }
+            if (ctx.logicalIndex().isEmpty() && bodyNamesAPit(ctx.body())) {
+                return cursors.pitSearch(ctx);
+            }
+        }
         RouteDecision decision = router.route(ctx, null);
         Map<String, JsonNode> filter = Transforms.resolveInjected(
                 Transforms.injectedFields(decision.transform()), decision.partition(), ctx);
@@ -163,6 +183,18 @@ public final class Pipeline {
                 ? Shaping.shape(upstream.body(), view(ctx, decision), true)
                 : upstream.body();
         return new PipelineResponse(upstream.status(), body);
+    }
+
+    /** Whether an index-less search body carries a {@code pit} clause. */
+    private static boolean bodyNamesAPit(byte[] body) {
+        if (body.length == 0) {
+            return false;
+        }
+        try {
+            return Json.parseObject(body).has("pit");
+        } catch (RewriteException e) {
+            return false; // the normal search path reports the malformed body
+        }
     }
 
     // ---- shared helpers (also used by MultiOps) ----

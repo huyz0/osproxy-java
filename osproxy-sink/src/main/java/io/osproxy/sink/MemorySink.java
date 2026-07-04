@@ -164,6 +164,70 @@ public final class MemorySink implements Sink, Reader {
         return false;
     }
 
+    // ---- cursor emulation: one batch carries everything, the next is empty ----
+
+    private final java.util.concurrent.atomic.AtomicLong cursorSeq =
+            new java.util.concurrent.atomic.AtomicLong();
+
+    @Override
+    public Response searchScroll(Target target, byte[] body, String scrollTtl)
+            throws SinkException {
+        Response first = search(target, body);
+        ObjectNode doc = parse(first.body());
+        doc.put("_scroll_id", "mem-scroll-" + cursorSeq.incrementAndGet());
+        return new Response(first.status(), doc.toString().getBytes());
+    }
+
+    @Override
+    public Response scrollNext(Target target, byte[] body) throws SinkException {
+        ObjectNode envelope = parse(body);
+        JsonNode id = envelope.get("scroll_id");
+        if (id == null || !id.isTextual() || !id.textValue().startsWith("mem-scroll-")) {
+            return new Response(404, "{\"error\":\"scroll not found\"}".getBytes());
+        }
+        ObjectNode out = MAPPER.createObjectNode();
+        out.put("_scroll_id", id.textValue());
+        ObjectNode hits = out.putObject("hits");
+        hits.putObject("total").put("value", 0).put("relation", "eq");
+        hits.putArray("hits");
+        return new Response(200, out.toString().getBytes());
+    }
+
+    @Override
+    public Response scrollDelete(Target target, byte[] body) throws SinkException {
+        parse(body);
+        return new Response(200, "{\"succeeded\":true}".getBytes());
+    }
+
+    @Override
+    public Response pitOpen(Target target, String keepAlive) {
+        ObjectNode out = MAPPER.createObjectNode();
+        out.put("pit_id", "mem-pit-" + cursorSeq.incrementAndGet());
+        return new Response(200, out.toString().getBytes());
+    }
+
+    @Override
+    public Response pitClose(Target target, byte[] body) throws SinkException {
+        parse(body);
+        return new Response(200, "{\"pits\":[]}".getBytes());
+    }
+
+    @Override
+    public Response searchIndexless(Target target, byte[] body) throws SinkException {
+        // A PIT search names no index; the memory emulation scans the target
+        // index anyway (the PIT snapshot semantics are the real cluster's job)
+        // and echoes the pit id back like OpenSearch does.
+        ObjectNode query = parse(body);
+        JsonNode pit = query.get("pit");
+        Response result = search(target, body);
+        if (pit != null && pit.has("id")) {
+            ObjectNode doc = parse(result.body());
+            doc.put("pit_id", pit.get("id").textValue());
+            return new Response(result.status(), doc.toString().getBytes());
+        }
+        return result;
+    }
+
     private static ObjectNode parse(byte[] doc) throws SinkException {
         try {
             JsonNode node = MAPPER.readTree(doc);

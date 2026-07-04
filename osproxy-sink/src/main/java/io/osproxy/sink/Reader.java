@@ -22,4 +22,45 @@ public interface Reader {
 
     /** {@code POST /{index}/_count} with the (already wrapped) body. */
     Response count(Target target, byte[] body) throws SinkException;
+
+    // ---- cursor lifecycle (scroll + PIT) ----
+    // Default implementations refuse: a reader that has not wired cursors
+    // fails closed rather than mis-serving them.
+
+    /** {@code POST /{index}/_search?scroll=<ttl>} — opens a scroll. */
+    default Response searchScroll(Target target, byte[] body, String scrollTtl)
+            throws SinkException {
+        throw cursorsUnsupported();
+    }
+
+    /** {@code POST /_search/scroll} — the next batch. */
+    default Response scrollNext(Target target, byte[] body) throws SinkException {
+        throw cursorsUnsupported();
+    }
+
+    /** {@code DELETE /_search/scroll} — releases a scroll. */
+    default Response scrollDelete(Target target, byte[] body) throws SinkException {
+        throw cursorsUnsupported();
+    }
+
+    /** {@code POST /{index}/_search/point_in_time?keep_alive=<ttl>}. */
+    default Response pitOpen(Target target, String keepAlive) throws SinkException {
+        throw cursorsUnsupported();
+    }
+
+    /** {@code DELETE /_search/point_in_time}. */
+    default Response pitClose(Target target, byte[] body) throws SinkException {
+        throw cursorsUnsupported();
+    }
+
+    /** {@code POST /_search} — index-less search (a PIT search names no index). */
+    default Response searchIndexless(Target target, byte[] body) throws SinkException {
+        throw cursorsUnsupported();
+    }
+
+    private static SinkException cursorsUnsupported() {
+        return new SinkException(
+                io.osproxy.core.ErrorCode.UNSUPPORTED_ENDPOINT,
+                "this reader does not support cursors");
+    }
 }

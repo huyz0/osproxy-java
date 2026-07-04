@@ -93,19 +93,23 @@ public final class Classify {
         };
     }
 
-    /** {@code _search} and its scroll tail ({@code _search/scroll} = cursor). */
+    /** {@code _search} and its cursor tails ({@code scroll}/{@code point_in_time}). */
     private static Classified classifySearchTail(
             RequestCtx.HttpMethod method, String index, String[] segments, int tailFrom) {
-        if (!isGetOrPost(method)) {
-            return UNKNOWN;
-        }
         if (segments.length > tailFrom) {
-            return segments[tailFrom].equals("scroll") || segments[tailFrom].equals("point_in_time")
+            boolean cursorTail = segments[tailFrom].equals("scroll")
+                    || segments[tailFrom].equals("point_in_time");
+            // Continue/create are GET/POST; DELETE releases the cursor.
+            boolean cursorMethod = isGetOrPost(method)
+                    || method == RequestCtx.HttpMethod.DELETE;
+            return cursorTail && cursorMethod
                     ? new Classified(EndpointKind.CURSOR,
                             Optional.ofNullable(index), Optional.empty())
                     : UNKNOWN;
         }
-        return new Classified(EndpointKind.SEARCH, Optional.ofNullable(index), Optional.empty());
+        return isGetOrPost(method)
+                ? new Classified(EndpointKind.SEARCH, Optional.ofNullable(index), Optional.empty())
+                : UNKNOWN;
     }
 
     private static boolean isGetOrPost(RequestCtx.HttpMethod method) {

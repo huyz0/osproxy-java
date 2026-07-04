@@ -49,6 +49,29 @@ public final class TenancyRouter {
         return decisionFor(ctx, partition, at);
     }
 
+    /**
+     * Routes a cursor request (scroll/PIT continue or close): these carry no
+     * index in the path, and the target index is irrelevant — the upstream
+     * call is cluster-scoped. The partition still resolves (isolation fields
+     * and id rules shape the batches), but a dedicated-cluster placement
+     * falls back to a placeholder index instead of failing closed.
+     */
+    public RouteDecision routeCursor(RequestCtx ctx) throws SpiException {
+        PartitionId partition = PartitionResolver.resolve(spi.partitionKeySpec(), ctx, null);
+        PlacementAt at = spi.placementFor(partition);
+        Placement placement = at.placement();
+        IndexName physicalIndex = switch (placement) {
+            case Placement.DedicatedIndex(var ignored, IndexName index) -> index;
+            case Placement.SharedIndex(var ignored, IndexName index, var alsoIgnored) -> index;
+            case Placement.DedicatedCluster ignored -> ctx.logicalIndex()
+                    .map(IndexName::new)
+                    .orElse(new IndexName("cursor"));
+        };
+        Target target = new Target(
+                placement.cluster(), physicalIndex, spi.clusterEndpoint(placement.cluster()));
+        return new RouteDecision(target, partition, transformFor(placement), at.epoch());
+    }
+
     /** Builds the decision from an already-resolved placement. */
     public RouteDecision decisionFor(RequestCtx ctx, PartitionId partition, PlacementAt at)
             throws SpiException {

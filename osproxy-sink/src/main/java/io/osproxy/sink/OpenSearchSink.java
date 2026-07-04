@@ -144,6 +144,59 @@ public final class OpenSearchSink implements Sink, Reader {
                 .submit(body.length == 0 ? "{}".getBytes(StandardCharsets.UTF_8) : body));
     }
 
+    @Override
+    public Response searchScroll(Target target, byte[] body, String scrollTtl)
+            throws SinkException {
+        WebClient client = client(target);
+        return request(target, () -> client.post("/" + target.index().value() + "/_search")
+                .queryParam("scroll", scrollTtl)
+                .header(io.helidon.http.HeaderNames.CONTENT_TYPE, "application/json")
+                .submit(body.length == 0 ? "{}".getBytes(StandardCharsets.UTF_8) : body));
+    }
+
+    @Override
+    public Response scrollNext(Target target, byte[] body) throws SinkException {
+        WebClient client = client(target);
+        return request(target, () -> client.post("/_search/scroll")
+                .header(io.helidon.http.HeaderNames.CONTENT_TYPE, "application/json")
+                .submit(body));
+    }
+
+    @Override
+    public Response scrollDelete(Target target, byte[] body) throws SinkException {
+        WebClient client = client(target);
+        return request(target, () -> client.method(io.helidon.http.Method.DELETE)
+                .path("/_search/scroll")
+                .header(io.helidon.http.HeaderNames.CONTENT_TYPE, "application/json")
+                .submit(body));
+    }
+
+    @Override
+    public Response pitOpen(Target target, String keepAlive) throws SinkException {
+        WebClient client = client(target);
+        return request(target, () -> client
+                .post("/" + target.index().value() + "/_search/point_in_time")
+                .queryParam("keep_alive", keepAlive)
+                .request());
+    }
+
+    @Override
+    public Response pitClose(Target target, byte[] body) throws SinkException {
+        WebClient client = client(target);
+        return request(target, () -> client.method(io.helidon.http.Method.DELETE)
+                .path("/_search/point_in_time")
+                .header(io.helidon.http.HeaderNames.CONTENT_TYPE, "application/json")
+                .submit(body));
+    }
+
+    @Override
+    public Response searchIndexless(Target target, byte[] body) throws SinkException {
+        WebClient client = client(target);
+        return request(target, () -> client.post("/_search")
+                .header(io.helidon.http.HeaderNames.CONTENT_TYPE, "application/json")
+                .submit(body.length == 0 ? "{}".getBytes(StandardCharsets.UTF_8) : body));
+    }
+
     private interface Call {
         HttpClientResponse invoke() throws SinkException;
     }

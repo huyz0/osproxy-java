@@ -129,4 +129,28 @@ class OpenSearchSinkLoopbackTest {
         assertThat(sink.get(overridden, "1", Optional.empty()).ok()).isTrue();
         assertThat(SEEN).hasSize(1);
     }
+
+    @Test
+    void cursorCallsHitTheExpectedWire() throws Exception {
+        SEEN.clear();
+        sink.searchScroll(target, "{}".getBytes(StandardCharsets.UTF_8), "1m");
+        sink.scrollNext(target, "{\"scroll_id\":\"s\"}".getBytes(StandardCharsets.UTF_8));
+        sink.scrollDelete(target, "{\"scroll_id\":\"s\"}".getBytes(StandardCharsets.UTF_8));
+        sink.pitOpen(target, "2m");
+        sink.pitClose(target, "{\"pit_id\":[\"p\"]}".getBytes(StandardCharsets.UTF_8));
+        sink.searchIndexless(target, new byte[0]);
+
+        List<Seen> seen = List.copyOf(SEEN);
+        assertThat(seen).extracting(Seen::method, Seen::path).containsExactly(
+                org.assertj.core.groups.Tuple.tuple("POST", "/orders/_search?scroll=1m"),
+                org.assertj.core.groups.Tuple.tuple("POST", "/_search/scroll"),
+                org.assertj.core.groups.Tuple.tuple("DELETE", "/_search/scroll"),
+                org.assertj.core.groups.Tuple.tuple(
+                        "POST", "/orders/_search/point_in_time?keep_alive=2m"),
+                org.assertj.core.groups.Tuple.tuple("DELETE", "/_search/point_in_time"),
+                org.assertj.core.groups.Tuple.tuple("POST", "/_search"));
+        assertThat(seen.get(1).body()).contains("scroll_id");
+        assertThat(seen.get(4).body()).contains("pit_id");
+        assertThat(seen.get(5).body()).isEqualTo("{}");
+    }
 }

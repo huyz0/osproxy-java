@@ -177,4 +177,36 @@ class TenancyRouterTest {
         assertThatThrownBy(() -> new TenancyRouter(spi).route(ctx("orders"), null))
                 .isInstanceOf(SpiException.PartitionUnresolved.class);
     }
+
+    @Test
+    void routeCursorUsesThePlacementIndexOrAPlaceholder() throws Exception {
+        var cursorCtx = new RequestCtx(
+                RequestCtx.HttpMethod.POST, "/_search/scroll", EndpointKind.CURSOR,
+                Optional.empty(), Optional.empty(),
+                List.of(Map.entry("x-tenant", "acme")), new byte[0], new Principal("a"));
+
+        var shared = new Placement.SharedIndex(
+                new ClusterId("c1"), new IndexName("shared"), INJECT);
+        assertThat(new TenancyRouter(spi(shared, Optional.empty()))
+                .routeCursor(cursorCtx).target().index().value()).isEqualTo("shared");
+
+        var dedicatedIdx = new Placement.DedicatedIndex(new ClusterId("c1"), new IndexName("di"));
+        assertThat(new TenancyRouter(spi(dedicatedIdx, Optional.empty()))
+                .routeCursor(cursorCtx).target().index().value()).isEqualTo("di");
+
+        // Dedicated cluster + no index: the placeholder, never a fail-closed
+        // refusal (the cursor call is cluster-scoped).
+        var dedicated = new Placement.DedicatedCluster(new ClusterId("acme-c"));
+        var d = new TenancyRouter(spi(dedicated, Optional.empty())).routeCursor(cursorCtx);
+        assertThat(d.target().index().value()).isEqualTo("cursor");
+        assertThat(d.target().cluster().value()).isEqualTo("acme-c");
+
+        // With an index in the path, the logical index passes through.
+        var indexed = new RequestCtx(
+                RequestCtx.HttpMethod.POST, "/orders/_search/point_in_time",
+                EndpointKind.CURSOR, Optional.of("orders"), Optional.empty(),
+                List.of(Map.entry("x-tenant", "acme")), new byte[0], new Principal("a"));
+        assertThat(new TenancyRouter(spi(dedicated, Optional.empty()))
+                .routeCursor(indexed).target().index().value()).isEqualTo("orders");
+    }
 }
