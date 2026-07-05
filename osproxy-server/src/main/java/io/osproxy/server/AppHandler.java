@@ -210,6 +210,14 @@ public final class AppHandler {
             return;
         }
 
+        // _bulk gets the same treatment for the same reason: its transform
+        // is per-item (inject/construct-id), so nothing about it needs the
+        // whole body in memory at once — only the buffered read imposed that.
+        if (classified.endpoint() == io.osproxy.core.EndpointKind.INGEST_BULK) {
+            streamBulk(req, res, classified, method.get(), principal.get());
+            return;
+        }
+
         // Bound the working set before buffering. A declared over-cap length
         // refuses immediately; a chunked body (no Content-Length) is read
         // incrementally and cut off the moment it crosses the cap, so the
@@ -291,6 +299,57 @@ public final class AppHandler {
                 recordCompletion(requestId, classified, method, principal,
                         streamed.status(), Optional.empty(), System.nanoTime() - started);
             }
+        } catch (Exception e) {
+            if (!res.isSent()) {
+                send(res, PipelineResponse.error(ErrorCode.UPSTREAM_FAILED));
+            }
+        }
+    }
+
+    /**
+     * Streams a tenanted {@code _bulk} request: parses and dispatches one
+     * NDJSON item at a time from the client's raw request stream, writing
+     * each result to the client as it completes — so, unlike every other
+     * tenanted endpoint, {@code _bulk} is not bound by {@code maxBodyBytes}
+     * either. {@link Pipeline#openBulkStream} validates the body isn't empty
+     * and its first line parses before anything is committed, so those two
+     * cases still get a normal error status; any failure after that point
+     * can only truncate the already-streamed response, since 200 is already
+     * committed by then (the same trade {@link #streamPassthrough} makes).
+     */
+    private void streamBulk(
+            ServerRequest req, ServerResponse res, Classify.Classified classified,
+            RequestCtx.HttpMethod method, Principal principal) {
+        long started = System.nanoTime();
+        String requestId = java.util.HexFormat.of().formatHex(randomBytes(8));
+        List<Map.Entry<String, String>> headers = new ArrayList<>();
+        req.headers().forEach(h -> headers.add(Map.entry(h.name(), h.values())));
+        RequestCtx ctx = new RequestCtx(
+                method, req.path().rawPath(), classified.endpoint(),
+                classified.logicalIndex(), classified.docId(),
+                headers, new byte[0], principal, req.query().rawValue());
+        try (java.io.InputStream in = req.content().hasEntity()
+                ? req.content().inputStream() : java.io.InputStream.nullInputStream()) {
+            Pipeline.BulkStream stream;
+            try {
+                stream = pipeline.openBulkStream(ctx, in);
+            } catch (io.osproxy.rewrite.RewriteException e) {
+                send(res, PipelineResponse.error(ErrorCode.MALFORMED_REQUEST));
+                return;
+            }
+            res.status(Status.OK_200).header(HeaderNames.create(REQUEST_ID_HEADER), requestId);
+            try {
+                try (var out = res.outputStream()) {
+                    stream.writeTo(out);
+                }
+            } catch (Exception e) {
+                // Once the output stream is requested, the status/headers are
+                // already committed — there is no error status left to send,
+                // only a best-effort truncation of the response already sent.
+                return;
+            }
+            recordCompletion(requestId, classified, method, principal, 200, Optional.empty(),
+                    System.nanoTime() - started);
         } catch (Exception e) {
             if (!res.isSent()) {
                 send(res, PipelineResponse.error(ErrorCode.UPSTREAM_FAILED));

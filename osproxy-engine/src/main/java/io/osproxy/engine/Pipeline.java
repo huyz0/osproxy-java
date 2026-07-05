@@ -110,6 +110,42 @@ public final class Pipeline {
         return passthrough;
     }
 
+    /**
+     * Opens a streaming {@code _bulk} response: reads just enough of
+     * {@code in} to confirm the body isn't empty and its first line parses,
+     * without dispatching any op yet. That lets the ingress still send a
+     * normal error status for those cases, then call {@link
+     * BulkStream#writeTo} once it has committed the response as 200 and is
+     * ready to stream — after which every item is parsed, dispatched, and
+     * written one at a time, never buffering the body as a byte[].
+     */
+    public BulkStream openBulkStream(RequestCtx ctx, java.io.InputStream in)
+            throws RewriteException {
+        var reader = new java.io.BufferedReader(
+                new java.io.InputStreamReader(in, java.nio.charset.StandardCharsets.UTF_8));
+        var items = MultiOps.peekBulkStream(reader);
+        return new BulkStream(ctx, items);
+    }
+
+    /** A validated, not-yet-dispatched streaming {@code _bulk} request. */
+    public final class BulkStream {
+        private final RequestCtx ctx;
+        private final java.util.Iterator<io.osproxy.rewrite.Bulk.Item> items;
+
+        private BulkStream(RequestCtx ctx, java.util.Iterator<io.osproxy.rewrite.Bulk.Item> items) {
+            this.ctx = ctx;
+            this.items = items;
+        }
+
+        /** Dispatches every item, writing each result as it completes. */
+        public void writeTo(java.io.OutputStream out)
+                throws java.io.IOException, SpiException, RewriteException, SinkException,
+                        EngineException {
+            var gen = Json.MAPPER.getFactory().createGenerator(out);
+            multiOps.bulkStreaming(ctx, items, gen);
+        }
+    }
+
     TenancyRouter router() {
         return router;
     }

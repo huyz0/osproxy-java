@@ -103,9 +103,19 @@ proxies a 16 MiB body through a proxy configured with a 1 KiB
 `osproxy.max-body-bytes` cap and asserts the upstream receives all 16 MiB —
 proving the streaming passthrough path (`AppHandler.streamPassthrough` →
 `Reader.forwardStreaming`) genuinely never materializes the body as a
-`byte[]`, rather than just raising an internal buffer size. Every tenanted
-endpoint still buffers up to the cap (`AppHandler.readCapped`); only
-passthrough-matched requests take the streaming path.
+`byte[]`, rather than just raising an internal buffer size.
+
+Tenanted `_bulk` gets the same proof despite still resolving tenancy and
+running the per-item transform:
+`BulkStreamingE2eTest.aTenantedBulkBodyLargerThanTheCapStreamsThroughAndDispatchesEveryItem`
+sends a 2,000-item NDJSON bulk body (well over the same 1 KiB cap) through a
+real `ReferenceTenancy` + `OpenSearchSink` pipeline and asserts every item
+dispatches and comes back `201`. `AppHandler.streamBulk` →
+`Pipeline.openBulkStream`/`MultiOps.bulkStreaming` parses and dispatches one
+NDJSON item at a time, so the request is never buffered whole either —
+`_bulk`'s existing line-oriented framing made it the second endpoint class to
+close after passthrough. Single-doc ingest and search still buffer up to the
+cap (`AppHandler.readCapped`).
 
 ## Connection handling
 

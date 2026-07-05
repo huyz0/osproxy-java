@@ -72,6 +72,78 @@ final class MultiOps {
         return new PipelineResponse(200, Json.writeBytes(out));
     }
 
+    /**
+     * Validates the stream is non-empty and its first item parses, without
+     * dispatching anything — so the ingress can still send a proper error
+     * status for an empty or malformed-at-the-first-line body before
+     * committing the response as 200. Unwraps the unchecked carrier {@link
+     * Bulk#parseBulkStream} uses back into the checked {@link
+     * RewriteException} it wraps.
+     */
+    static java.util.Iterator<Bulk.Item> peekBulkStream(java.io.BufferedReader reader)
+            throws RewriteException {
+        java.util.Iterator<Bulk.Item> items = Bulk.parseBulkStream(reader);
+        try {
+            if (!items.hasNext()) {
+                throw new RewriteException(
+                        RewriteException.Kind.MALFORMED_MULTI, "empty bulk body");
+            }
+        } catch (RuntimeException e) {
+            if (e.getCause() instanceof RewriteException re) {
+                throw re;
+            }
+            throw e;
+        }
+        return items;
+    }
+
+    /**
+     * Streaming twin of {@link #bulk}: dispatches one item at a time from an
+     * already-validated iterator and writes each result to {@code gen} as it
+     * completes, so a bulk body is never buffered as a byte[] regardless of
+     * its size. Trade-off: once the first item has been written, a failure
+     * on a later item cannot unwind the response's 200 status — the caller
+     * has already committed it. That mirrors OpenSearch's own bulk
+     * semantics (partial success, reported per item) more than it departs
+     * from them.
+     */
+    void bulkStreaming(
+            RequestCtx ctx, java.util.Iterator<Bulk.Item> items,
+            com.fasterxml.jackson.core.JsonGenerator gen)
+            throws java.io.IOException, SpiException, RewriteException, SinkException,
+                    EngineException {
+        gen.writeStartObject();
+        gen.writeNumberField("took", 0);
+        gen.writeArrayFieldStart("items");
+        boolean errors = false;
+        try {
+            while (items.hasNext()) {
+                Bulk.Item item = items.next();
+                ItemCtx ic = prepare(ctx, item);
+                WriteBatch.Ack ack = pipeline.sink().write(List.of(ic.op()));
+                WriteBatch.OpResult result = ack.results().get(0);
+                errors |= !result.ok();
+                gen.writeStartObject();
+                gen.writeObjectFieldStart(ic.verbKey());
+                gen.writeStringField("_index", ic.logicalIndex());
+                gen.writeStringField("_id", ic.logicalId());
+                gen.writeNumberField("status", result.status());
+                gen.writeStringField("result", result.result());
+                gen.writeEndObject();
+                gen.writeEndObject();
+            }
+        } catch (RuntimeException e) {
+            if (e.getCause() instanceof RewriteException re) {
+                throw re;
+            }
+            throw e;
+        }
+        gen.writeEndArray();
+        gen.writeBooleanField("errors", errors);
+        gen.writeEndObject();
+        gen.flush();
+    }
+
     /** Per-item routing/transform state carried through to response assembly. */
     private record ItemCtx(WriteBatch.Op op, String verbKey, String logicalIndex, String logicalId) {}
 

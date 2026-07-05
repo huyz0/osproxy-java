@@ -48,6 +48,48 @@ class BulkAndMultiTest {
     }
 
     @Test
+    void parseBulkStreamYieldsTheSameItemsAsTheBufferedParse() throws Exception {
+        String ndjson = """
+                {"index":{"_index":"orders","_id":"1"}}
+                {"msg":"a"}
+                {"create":{"_id":"2"}}
+                {"msg":"b"}
+                {"update":{"_id":"2"}}
+                {"doc":{"msg":"b2"}}
+                {"delete":{"_id":"1"}}
+                """;
+        var reader = new java.io.BufferedReader(new java.io.StringReader(ndjson));
+        var streamed = new java.util.ArrayList<Bulk.Item>();
+        Bulk.parseBulkStream(reader).forEachRemaining(streamed::add);
+
+        List<Bulk.Item> buffered = Bulk.parseBulk(ndjson.getBytes());
+        assertThat(streamed).hasSize(buffered.size());
+        for (int i = 0; i < buffered.size(); i++) {
+            assertThat(streamed.get(i).action()).isEqualTo(buffered.get(i).action());
+            assertThat(streamed.get(i).index()).isEqualTo(buffered.get(i).index());
+            assertThat(streamed.get(i).id()).isEqualTo(buffered.get(i).id());
+            assertThat(streamed.get(i).doc()).isEqualTo(buffered.get(i).doc());
+        }
+    }
+
+    @Test
+    void parseBulkStreamReportsAnEmptyBodyAsHasNextFalse() {
+        var reader = new java.io.BufferedReader(new java.io.StringReader(""));
+        assertThat(Bulk.parseBulkStream(reader).hasNext()).isFalse();
+    }
+
+    @Test
+    void parseBulkStreamWrapsAMalformedLineAsARewriteExceptionCause() {
+        var reader = new java.io.BufferedReader(new java.io.StringReader("not json\n{}\n"));
+        var items = Bulk.parseBulkStream(reader);
+        assertThatThrownBy(items::hasNext)
+                .isInstanceOf(RuntimeException.class)
+                .extracting(Throwable::getCause)
+                .isInstanceOfSatisfying(RewriteException.class,
+                        e -> assertThat(e.kind()).isEqualTo(RewriteException.Kind.INVALID_JSON));
+    }
+
+    @Test
     void mgetParsesDocsAndRefusesMissingIds() throws Exception {
         var items = Multi.parseMget(
                 "{\"docs\":[{\"_index\":\"orders\",\"_id\":\"1\"},{\"_id\":\"2\"}]}".getBytes());

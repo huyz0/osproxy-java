@@ -27,12 +27,15 @@ index-prefix based, evaluated before tenancy resolution
 fail-closed — an index that doesn't match a configured prefix keeps full
 tenancy, never the other way around.
 
-A passthrough-matched request is also the one case that **streams both
-directions**: the client body is piped straight to the upstream and the
-response piped straight back, so it is not bound by `osproxy.max-body-bytes`
-at all — see [Performance](/osproxy-java/11-performance/) for a measured
-proof (a 16 MiB body through a 1 KiB-capped proxy). Every tenanted endpoint
-still buffers up to the cap, since those paths parse and rewrite the body.
+A passthrough-matched request also **streams both directions**: the client
+body is piped straight to the upstream and the response piped straight back,
+so it is not bound by `osproxy.max-body-bytes` at all — see
+[Performance](/osproxy-java/11-performance/) for a measured proof (a 16 MiB
+body through a 1 KiB-capped proxy). Tenanted `_bulk` streams too, despite
+still running tenancy resolution and the per-item transform: it parses and
+dispatches one NDJSON item at a time instead of buffering the whole payload,
+so it escapes the cap on the same terms as passthrough (proof also on the
+Performance page). Single-doc ingest and search still buffer up to the cap.
 
 ## Sync vs async writes
 

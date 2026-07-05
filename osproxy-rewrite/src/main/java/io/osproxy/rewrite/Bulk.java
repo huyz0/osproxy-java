@@ -96,6 +96,85 @@ public final class Bulk {
         return items;
     }
 
+    /**
+     * Lazily parses NDJSON one item at a time from an open reader, for the
+     * streaming bulk path — never materializes the whole payload as a
+     * string or a list. A parse failure is reported as a {@link
+     * RewriteException} wrapped in an unchecked {@link
+     * java.io.UncheckedIOException}-style carrier, since {@link
+     * java.util.Iterator} cannot declare checked exceptions; callers should
+     * unwrap it (see the {@code getCause() instanceof RewriteException}
+     * pattern in {@code MultiOps}).
+     */
+    public static java.util.Iterator<Item> parseBulkStream(java.io.BufferedReader reader) {
+        return new java.util.Iterator<>() {
+            private Item next;
+            private boolean done;
+
+            private void advance() {
+                if (next != null || done) {
+                    return;
+                }
+                try {
+                    String line;
+                    do {
+                        line = reader.readLine();
+                    } while (line != null && line.strip().isEmpty());
+                    if (line == null) {
+                        done = true;
+                        return;
+                    }
+                    ActionLine action = parseActionLine(line.strip());
+                    Optional<ObjectNode> doc = Optional.empty();
+                    if (action.action.hasDocLine()) {
+                        String docLine = reader.readLine();
+                        if (docLine == null || docLine.strip().isEmpty()) {
+                            throw new RewriteException(
+                                    RewriteException.Kind.MALFORMED_MULTI,
+                                    action.action.key() + " action missing its document line");
+                        }
+                        JsonNode parsed;
+                        try {
+                            parsed = Json.MAPPER.readTree(docLine.strip());
+                        } catch (java.io.IOException e) {
+                            throw new RewriteException(
+                                    RewriteException.Kind.INVALID_JSON,
+                                    "invalid bulk document line");
+                        }
+                        if (!(parsed instanceof ObjectNode obj)) {
+                            throw new RewriteException(
+                                    RewriteException.Kind.NOT_AN_OBJECT,
+                                    "bulk document line must be an object");
+                        }
+                        doc = Optional.of(obj);
+                    }
+                    next = new Item(action.action, action.index, action.id, doc, action.meta);
+                } catch (RewriteException e) {
+                    throw new RuntimeException(e);
+                } catch (java.io.IOException e) {
+                    throw new java.io.UncheckedIOException(e);
+                }
+            }
+
+            @Override
+            public boolean hasNext() {
+                advance();
+                return next != null;
+            }
+
+            @Override
+            public Item next() {
+                advance();
+                if (next == null) {
+                    throw new java.util.NoSuchElementException();
+                }
+                Item item = next;
+                next = null;
+                return item;
+            }
+        };
+    }
+
     private record ActionLine(Action action, Optional<String> index, Optional<String> id, ObjectNode meta) {}
 
     private static ActionLine parseActionLine(String line) throws RewriteException {

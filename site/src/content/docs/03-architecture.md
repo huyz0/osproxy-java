@@ -143,15 +143,16 @@ things differ by platform or by scope:
 - **Authorization**: no separate post-authentication `Authorizer` seam yet —
   `BearerAuth` resolves a `Principal`, and that's the extent of the
   built-in auth model.
-- **Streaming request/response bodies**: partially closed. Tenant-agnostic
-  passthrough requests now stream both directions — neither the request nor
-  the response body is ever materialized as a byte array, so a passthrough
-  deployment is not bound by `osproxy.max-body-bytes` at all (see
-  [Choosing a Mode](/osproxy-java/10-choosing-a-mode/)). Every **tenanted**
-  endpoint (ingest, search, bulk, …) still buffers its body up to the cap,
-  because those paths parse and rewrite the document — true streaming there
-  would need a token-level streaming transform (Rust's `search_stream.rs`),
-  which this port doesn't have yet.
+- **Streaming request/response bodies**: mostly closed. Tenant-agnostic
+  passthrough requests stream both directions verbatim, and **tenanted
+  `_bulk`** streams too — it parses one NDJSON item at a time and dispatches
+  each as it's parsed, so it is not bound by `osproxy.max-body-bytes` either,
+  even though it still runs the per-item inject/construct-id transform (see
+  [Choosing a Mode](/osproxy-java/10-choosing-a-mode/)). Single-doc ingest
+  and search still buffer up to the cap: a single JSON body's injected/
+  wrapped fields sit at an arbitrary tree depth, which needs a token-level
+  streaming transform (Rust's `search_stream.rs`) this port doesn't have yet
+  — `_bulk`'s own NDJSON framing made it the easier case to close first.
 - **etcd-backed control plane**: the Rust project has a reference
   `EtcdDirectiveStore`; the Java port uses HTTP-polling stores
   (`PollingDirectiveStore`/`PollingPlacementStore`) against any HTTP source
