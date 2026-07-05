@@ -33,40 +33,60 @@ streaming-twin pass, not yet done.
 ## Per-request added latency and throughput (e2e, real OpenSearch)
 
 Ingest workload, direct-to-cluster baseline vs. through the proxy, swept
-c=1/8/32/64 (1600 ops/level):
+c=1/8/32/64 (1600 ops/level). **Re-measured 2026-07-05, after streaming
+ingest became the default path** for any tenancy where it's eligible
+(`Pipeline.supportsStreamingIngest`, true for the reference tenancy) — this
+table used to describe the pre-streaming buffered path exclusively; it now
+reflects what actually runs:
 
-| Concurrency | Throughput (ops/s) | Ratio (proxied/baseline) | Added p50 | Added p99 |
-|---|---|---|---|---|
-| 1 | ~91 | 0.93–1.03 | ~0 (sampling noise) | -1.4ms to +0.8ms |
-| 8 | — | 0.93–1.03 | ~0 | — |
-| 32 | — | 0.93–1.03 | ~0 | — |
-| 64 | ~3596 | 0.93–1.03 | ~0 | up to +13.3ms |
+| Concurrency | Baseline ops/s | Proxied ops/s | Ratio | Added p50 | Added p99 |
+|---|---|---|---|---|---|
+| 1 | 88 | 90 | 1.03 | -0.25ms | -1.59ms |
+| 8 | 546 | 556 | 1.02 | -0.17ms | -1.09ms |
+| 32 | 1974 | 2018 | 1.02 | +0.42ms | -4.81ms |
+| 64 | 3976 | 3607 | 0.91 | +1.38ms | +4.84ms |
 
-Throughput scales 91 → 3596 ops/s from c=1 to c=64 (proxy scales by pool
-reuse, not by serializing on a lock). The c=64 p99 tail is worth reading
-honestly: it may be a real GC pause or JIT effect, or it may be thin
-sampling at high concurrency (1600 ops isn't much for a tail percentile) —
-not yet isolated.
+Compared to the last pre-streaming measurement: c=64 throughput ratio moved
+from the 0.93–1.03 band down to 0.91 — a real, if modest, regression at high
+concurrency, plausibly the per-request `PipedOutputStream` + virtual-thread
+producer streaming ingest now spins up even for small documents (see
+[Streaming transform cost](#streaming-transform-cost-jmh) below). The tail
+latency actually improved (c=64 added p99 was up to +13.3ms before, now
++4.84ms), so this is a real trade, not a strict win or loss. One run each,
+not a statistically rigorous sweep — reproduce before trusting the exact
+numbers.
 
 Reproduce: `./gradlew :osproxy-server:test -PincludeIntegration --tests PerfHarnessE2eTest`
 
 ## Memory footprint under sustained load
 
 20,000 sequential requests, 256MiB-capped heap, forced GC before each RSS
-snapshot:
+snapshot. **Re-measured 2026-07-05** (same streaming-by-default caveat as
+above):
 
-| | RSS |
-|---|---|
-| Idle | ~116 MiB |
-| After soak | ~231 MiB (≈2.0x, ~115 MiB absolute growth) |
+| | RSS | Previous (pre-streaming) |
+|---|---|---|
+| Idle | 117.9 MiB | ~116 MiB |
+| After soak | 281.4 MiB (2.39x, +163.5 MiB) | ~231 MiB (2.0x, +115 MiB) |
 
-Bounded, not leaking — RSS stayed flat across repeated runs at this ratio.
-The idle number itself (~116 MiB) is the interesting one for comparison
-purposes: see below.
+Idle is unchanged (streaming adds no fixed cost at rest). Soak growth is
+measurably higher than the pre-streaming baseline — +163.5 MiB vs. +115
+MiB, a genuine regression, consistent with a `PipedOutputStream`/
+`PipedInputStream` pair plus a dedicated virtual thread being allocated per
+eligible request instead of one contiguous buffer. Still bounded (RSS
+plateaus, doesn't climb unboundedly), but the streaming architecture is not
+free at this axis — this is new information the pre-streaming table didn't
+have to account for.
 
 Reproduce: `./gradlew :osproxy-server:test -PincludeIntegration --tests SoakE2eTest`
 
 ## Rust vs Java, measured side by side
+
+**This comparison predates streaming ingest and has not been re-run since**
+— read it as describing the pre-streaming buffered path, not necessarily
+today's default. Given the e2e table above shows a real (if modest)
+regression at c=64 post-streaming, this table is due a re-run before being
+cited as current.
 
 Same OpenSearch container, same box, both binaries run one after another
 (not concurrently), same load generator, 3 reps per concurrency level,
@@ -141,6 +161,86 @@ keeps enforcing `osproxy.max-body-bytes`
 (`aSearchBodyLargerThanTheCapIsStillRefusedWith413`): a query is not the
 kind of legitimately-large aggregate payload passthrough/`_bulk` exist to
 escape, so the cap stays.
+
+## Streaming transform cost (JMH)
+
+The measurements above proved streaming *works* and preserves isolation.
+They didn't establish what it *costs* — no benchmark existed for the
+streaming transforms or the pipe/virtual-thread machinery
+`ingestDocStreaming`/`searchStreaming` build per request. `StreamingTransformBench`
+(2026-07-05) closes that gap, at two levels: the token-level transforms
+alone, and the full `Pipeline` call as it actually runs in production
+(`MemorySink`, no real network — isolates the engine-side cost only).
+
+**Transform-only** (no pipe, no thread — parser/generator vs. tree),
+average time per op:
+
+| Transform | 256B | 4KiB | 64KiB |
+|---|---|---|---|
+| `injectFields` (buffered) | 0.70µs | 7.44µs | 143.9µs |
+| `injectFieldsStreaming` | 0.64µs | 4.65µs | 86.7µs |
+| `wrapQuery` (buffered) | 0.93µs | 6.87µs | 144.3µs |
+| `wrapQueryStreaming` | 0.91µs | 4.90µs | 88.2µs |
+
+At the transform level alone, streaming is faster in wall-clock time at
+every size tested — roughly 40% faster by 64KiB — but allocates *more*
+bytes per op (e.g. `injectFieldsStreaming` at 64KiB: 437KB/op vs.
+`injectFields`'s 187KB/op). Jackson's streaming generator apparently
+trades allocation for fewer full-tree passes; worth knowing, not
+alarming in isolation.
+
+`parseBulk` inverts this: the streaming line-by-line parse
+(`Bulk.parseBulkStream`, drained fully here) is consistently *slower*
+than the batch `String.split` buffered version, and allocates more —
+at 100 docs × 4KiB, 550µs vs. 275µs (about 2x). `BufferedReader.readLine()`
+plus per-line parser construction costs more than one shared parser over
+a pre-split array. Not disqualifying (`_bulk` streaming's real value is
+escaping `max-body-bytes`, not raw parse speed), but it means the parse
+step itself isn't the free win the transform-only ingest/search numbers
+might suggest.
+
+**Full pipeline, including the pipe + virtual-thread producer** —
+this is the number that matters for "is streaming ingest worth it":
+
+| | 256B | 4KiB | 64KiB |
+|---|---|---|---|
+| `pipelineIngestBuffered` (`Pipeline.handle`) | 1.52µs | 11.55µs | 162.0µs |
+| `pipelineIngestStreaming` (`Pipeline.ingestDocStreaming`) | 18.53µs | 24.72µs | 478.6µs |
+| Ratio | **12.2x slower** | **2.1x slower** | **3.0x slower** |
+
+Allocation tells the same story: 5.6KB/op buffered vs. 58.8KB/op streaming
+at 256B (over 10x), narrowing to 557KB vs. 255KB (2.2x) at 64KiB.
+
+**This is a real, measured cost, not noise** — streaming ingest is slower
+and allocates more at *every* size tested, worst at the small end where
+the `PipedOutputStream`/`PipedInputStream` pair and the dedicated virtual
+thread `ingestDocStreaming` spins up per request dominate over whatever
+buffering they're saving. It lines up with what the e2e re-run above
+already hinted at (throughput ratio dipping to 0.91 at c=64, up from the
+0.93–1.03 band pre-streaming) and the soak growth regression (+163.5 MiB
+vs. +115 MiB) — all three independent measurements point the same
+direction: the pipe/thread-hop architecture has a real cost, and for
+typical single-document sizes it looks larger than the cost it was meant
+to replace.
+
+**What this means, plainly:** streaming ingest still does what it was
+built for — a document over `max-body-bytes` still gets rejected
+correctly, and one *within* the cap now takes a different, not
+obviously cheaper, code path than before. The functional behavior (the
+proxy stays correct, the cap still enforces) hasn't changed. The
+performance claim implicit in shipping it as the default path for
+eligible tenancies — "this should be at least as cheap as buffering,
+since it avoids materializing a full copy" — is not supported by this
+measurement for ordinary request sizes. Search streaming almost
+certainly has the same shape (same pipe/thread pattern, same producer
+close relationship) but wasn't separately benchmarked here — added as a
+follow-up if this is prioritized. A lower-overhead approach worth
+considering: a single-thread, no-pipe token copy (the same technique
+`_bulk` streaming already uses, dispatching per item without ever
+opening a `PipedOutputStream`) would likely close most of this gap
+without giving up the memory-buffering benefit for large documents.
+
+Reproduce: `./gradlew :osproxy-jmh:jmh -Pjmh.includes=Streaming`
 
 ## Connection handling
 
