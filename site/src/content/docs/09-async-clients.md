@@ -7,7 +7,7 @@ A single-document write (`INGEST_DOC` or `DELETE_BY_ID`) carrying
 `x-osproxy-write-mode: async` is fully transformed by the pipeline exactly
 as a synchronous write would be, but instead of dispatching to OpenSearch it
 hands the envelope to a Kafka producer and returns as soon as the broker
-acknowledges — not as soon as OpenSearch has indexed it.
+acknowledges, not as soon as OpenSearch has indexed it.
 
 ```
 PUT /orders/_doc/42
@@ -38,7 +38,7 @@ Async mode is opt-in per request and narrowly scoped:
 
 ## Selecting async
 
-Set the header on the request you want async — there is no fleet-wide or
+Set the header on the request you want async, there is no fleet-wide or
 per-tenant default; the client decides per call. This mirrors the Rust
 project's ADR-010 stance: async is a request-level choice, not a
 deployment-level one, because the durability trade-off (broker ack vs.
@@ -47,7 +47,7 @@ cluster-indexed ack) is the client's to make for that particular write.
 ## Handling the outcome
 
 The response body's `op_id` is the broker-assigned identifier for the
-produced record — opaque to the client, useful for correlating with
+produced record, opaque to the client, useful for correlating with
 whatever consumes the topic downstream (a pull-based indexer, an audit
 log, a replay tool). There is no synchronous "did it land" callback beyond
 the broker ack; if you need to know the document is queryable, poll for it
@@ -55,7 +55,7 @@ or consume the same topic.
 
 ## `_delete_by_query`: the async-only expansion
 
-`_delete_by_query` has no synchronous implementation — it's a query-driven
+`_delete_by_query` has no synchronous implementation: it's a query-driven
 mutation the fan-out queue can't carry as a single op. With
 `osproxy.delete-by-query-expansion=true` and the async header set, the
 proxy instead runs the partition-scoped match query itself (the same
@@ -78,7 +78,7 @@ x-tenant: acme
 
 Refuse-don't-lie applies here too: sync mode (no header) is `400`,
 expansion disabled is `400`, no fan-out sink configured is `422`, and a
-match set over the cap is `400` — the whole request is refused rather than
+match set over the cap is `400`, the whole request is refused rather than
 silently truncated to the first 10,000 matches.
 
 → [Choosing a Mode](/osproxy-java/10-choosing-a-mode/)

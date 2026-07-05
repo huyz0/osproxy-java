@@ -7,7 +7,7 @@ placement policy, with write/read symmetry, epoch-gated migration, and
 shape-only observability built in.
 
 It is a from-scratch port of [osproxy](https://github.com/huyz0/opensearch-proxy),
-a Rust library with the same design — see the [User Guide](site/) for the full
+a Rust library with the same design. See the [User Guide](site/) for the full
 story; this README is the quickstart.
 
 ## Quickstart

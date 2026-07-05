@@ -25,10 +25,10 @@ minimal implementation is a handful of lines.
 
 - **Never let an unchecked exception escape.** Every anticipated failure is
   a typed `SpiException` subtype (the analog of the Rust contract's "must
-  not panic"). `placementFor` may block on a backend lookup — methods run
+  not panic"). `placementFor` may block on a backend lookup, methods run
   on virtual threads, so blocking I/O here is fine and idiomatic.
 - **A `SharedIndex` placement's `docIdRule` must reference `{partition}`.**
-  `TenancyRouter` fails closed (refuses the request) if it doesn't — two
+  `TenancyRouter` fails closed (refuses the request) if it doesn't, two
   tenants' documents could otherwise collide on the same physical id.
 - **`injectedFields()` and the read-side filter are symmetric by
   construction.** You don't write the read filter yourself; the engine
@@ -83,7 +83,7 @@ dynamically (the polling placement store does this, see
 Unlike the Rust project's pluggable `Authenticator`/`Authorizer` traits,
 osproxy-java ships one concrete `BearerAuth`: a `Map<String, String>` of
 bearer token → tenant. An empty map is "dev mode" (the `x-tenant` header is
-trusted — never run that in production). There is no extension seam here
+trusted, never run that in production). There is no extension seam here
 yet; if you need a different auth model, the fork point is `AppHandler`
 itself, which is a small, readable class.
 
@@ -104,7 +104,7 @@ public interface Reader {
 
 `OpenSearchSink` implements both over a pooled Helidon `WebClient`.
 `MemorySink` implements both in memory for tests. Implement your own pair to
-back the proxy with something else entirely — the engine only calls
+back the proxy with something else entirely: the engine only calls
 through these two interfaces, never the concrete OpenSearch client.
 
 ## `Router` (advanced): custom routing that bypasses tenancy
@@ -112,7 +112,7 @@ through these two interfaces, never the concrete OpenSearch client.
 `TenancyRouter` adapts a `TenancySpi` into the engine's `Router` seam. Most
 users never touch `Router` directly. The one built-in exception is
 `PassthroughPolicy`, which the `Pipeline` checks *before* asking the router
-anything at all — see [Choosing a Mode](/osproxy-java/10-choosing-a-mode/).
+anything at all, see [Choosing a Mode](/osproxy-java/10-choosing-a-mode/).
 
 ## Error taxonomy
 

@@ -81,5 +81,5 @@ Rust project's docs.
 
 This guide is the entry point for using the proxy. It does not cover
 day-to-day contribution workflow or Gradle module internals beyond what a
-consumer needs — see the module Javadoc and `README.md` in each
+consumer needs, see the module Javadoc and `README.md` in each
 `osproxy-*` directory for that.

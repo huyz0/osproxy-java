@@ -2,7 +2,7 @@
 title: "8. Observability & Control Plane"
 ---
 Every observability surface here is shape-only by construction: it can name
-an endpoint kind, a status code, a request id, a trace id — never a tenant
+an endpoint kind, a status code, a request id, a trace id, never a tenant
 value, a document body, or a credential.
 
 ## The shape-only causal trace
@@ -10,7 +10,7 @@ value, a document body, or a credential.
 Every request produces an `ExplainDoc`: request id, W3C trace id, endpoint
 kind, method, status, an error code when applicable, and duration. It is
 built once per request in `AppHandler.record` and fed to three places at
-once — the always-available explain store, the request log (if enabled),
+once, the always-available explain store, the request log (if enabled),
 and the break-glass tape (if a directive selected it).
 
 ## `GET /_osproxy/explain/{request_id}`
@@ -37,7 +37,7 @@ Both `/_osproxy/explain` and `/_osproxy/breakglass` can be turned off
 unauthenticated in production. Disabled requests report
 `{"error":"not_enabled"}` (404) rather than a bare 404, so an operator can
 tell "turned off here" from "no such route." `/_osproxy/metrics` always
-stays on regardless — it is the one surface meant to survive with `/debug`
+stays on regardless, it is the one surface meant to survive with `/debug`
 off.
 
 ## Runtime diagnostics directives
@@ -62,7 +62,7 @@ matches, until it expires:
 Every field except `id`, `level`, and `ttl_seconds` is optional and
 matches everything when absent. `sample_per_mille` samples deterministically
 by request id, so the same 1% of requests record on every instance that
-sees them — not a coin flip per instance.
+sees them, not a coin flip per instance.
 
 ### `DiagLevel` ladder
 
@@ -73,7 +73,7 @@ sees them — not a coin flip per instance.
 | `verbose` | Metrics + explain + a JSON log line, when a log sink is wired (`osproxy.log-requests`). |
 
 The **effective** level for one request is the baseline raised by the
-highest-level matching directive — a silencing `off` directive only wins
+highest-level matching directive, a silencing `off` directive only wins
 when nothing raises the level above it.
 
 ### Two ways to apply a directive
@@ -86,8 +86,8 @@ verbatim (the same decoder validates both directions, fail-closed on any
 unknown key).
 
 **Per-request, via a signed header**: this Java port does not yet ship the
-Rust project's HMAC-verified `X-Debug-Directive` single-request channel —
-the admin endpoint (fleet-wide or single-instance) is the only publish path
+Rust project's HMAC-verified `X-Debug-Directive` single-request channel.
+The admin endpoint (fleet-wide or single-instance) is the only publish path
 today.
 
 ## The control plane
@@ -118,7 +118,7 @@ epoch only on a real move, engaging the stale-write gate.
 ## `DiagnosticSink`: off-instance capture delivery
 
 A proxy fleet serves a request on whichever instance the load balancer
-picked, so a break-glass capture lands on that instance only — its local
+picked, so a break-glass capture lands on that instance only: its local
 ring is invisible to the others. `osproxy.log-diagnostic-captures=true`
 also hands each `ring_buffer`-selected `ExplainDoc` to a `DiagnosticSink`
 (the reference `StdoutDiagnosticSink` tags it `"kind":"diagnostic_capture"`
@@ -126,7 +126,7 @@ so a log collector can index it separately), so an external aggregator can
 serve the capture by `trace_id` regardless of which instance handled it.
 The seam's contract says implementations must not throw; `Observability`
 enforces that at the one call site rather than trusting every
-implementation to self-guard — a broken aggregator degrades diagnostics,
+implementation to self-guard: a broken aggregator degrades diagnostics,
 never request availability.
 
 ## OTLP export & distributed tracing
@@ -136,14 +136,14 @@ span per request, POSTed to `{endpoint}/v1/traces`, with a bounded
 in-flight semaphore that sheds spans behind a slow collector rather than
 queuing unboundedly. W3C `traceparent`/`tracestate` propagate through a
 `ScopedValue` (`Tracing.CURRENT`) bound once per request and read at the
-sink's one upstream choke point — the proxy is a real hop in the trace
+sink's one upstream choke point: the proxy is a real hop in the trace
 (new span id, same trace id), not a transparent relay.
 
 ## Forwarding client headers to the upstream
 
 `osproxy.header-forwarding.enabled` (default `true`) forwards every client
-header to the upstream — minus a mandatory, non-configurable strip list
-(hop-by-hop headers, `host`, `content-length`, `accept-encoding`) — on
+header to the upstream, minus a mandatory, non-configurable strip list
+(hop-by-hop headers, `host`, `content-length`, `accept-encoding`), on
 every call the sink makes for a request: write, read, cursor, and
 tenant-agnostic passthrough forward alike, via a `ForwardHeaders`
 `ScopedValue` read at the same choke point as the trace header.

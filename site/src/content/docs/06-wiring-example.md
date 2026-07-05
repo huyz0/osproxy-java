@@ -59,7 +59,7 @@ AppHandler handler = new AppHandler(
 
 Every one of these is additive: leave any of them unset and the proxy
 behaves exactly as the minimal example. This is the same builder-layering
-discipline the Rust `osproxy` uses — advanced capability is off until you
+discipline the Rust `osproxy` uses: advanced capability is off until you
 turn it on.
 
 ## Serving with TLS / mTLS
@@ -87,6 +87,6 @@ request over a plaintext listener is refused rather than silently accepted.
 above from a `ProxyConfig`, wiring capture, async fan-out, FIPS, OTLP,
 directive/placement polling, and the passthrough policy from config keys.
 Run the binary directly, or read `Main.java` as a worked example, then
-adapt it — it is deliberately one linear method, not a framework you extend.
+adapt it. It is deliberately one linear method, not a framework you extend.
 
 → [Configuration](/osproxy-java/07-configuration/)

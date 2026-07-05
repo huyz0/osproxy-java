@@ -62,7 +62,7 @@ flowchart TB
 | **osproxy-observe** | `Directive`/`DirectiveSet` (level/targeting/TTL/sampling), `ExplainDoc`/`ExplainStore`, `BreakGlassBuffer`, `DiagnosticSink` seam, `Metrics`, `SpanExporter` seam. | core |
 | **osproxy-otlp** | `OtlpHttpExporter`: POSTs the pure OTLP/JSON span encoding to a collector, fire-and-forget with a bounded in-flight semaphore. | observe |
 | **osproxy-capture** | The `Capture` seam for tenant-agnostic, full-fidelity traffic capture (`Capture.Record`, `Capture.redacting(...)`, `MemoryCapture`, `AckProducer`). | core |
-| **osproxy-kafka** | `KafkaAckProducer` (acks=all, idempotent) — the concrete broker-backed implementation both async writes and capture can use. | capture |
+| **osproxy-kafka** | `KafkaAckProducer` (acks=all, idempotent), the concrete broker-backed implementation both async writes and capture can use. | capture |
 | **osproxy-config** | `ProxyConfig`: typed load/validate from Helidon `Config` (file + `OSPROXY_*` env), all defaults applied once, plus a named `Builder` for tests. | core |
 | **osproxy-server** | The `osproxy-server` binary: `Main`, `AppHandler` (the Helidon ingress), `BearerAuth`, `ReferenceTenancy`, `PollingDirectiveStore`/`PollingPlacementStore`, `CryptoPosture` (FIPS engagement). | everything above |
 | **osproxy-jmh** | JMH microbenchmarks (dimensional: doc size × bulk size × threads) and the `io.osproxy.bench` vocabulary (`LatencySummary`, `PerfProfile`, `FootprintProfile`) the e2e perf/soak tests in `osproxy-server` also use. | rewrite, engine, tenancy, spi, core, sink (jmh sourceset only) |

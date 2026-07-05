@@ -7,7 +7,7 @@ page is the summary, not aspirational.
 ## Functional scope
 
 - **Ingress**: HTTP/1.1 on Helidon SE's virtual-thread server; cleartext and
-  TLS/mTLS. (No gRPC or HTTP/2 ingress — a difference from the Rust
+  TLS/mTLS. (No gRPC or HTTP/2 ingress, a difference from the Rust
   `osproxy` sibling, which has both; see [Architecture](/osproxy-java/03-architecture/).)
 - **Single-target routing** for **all** request types (read and write).
 - **Ingest demux**: one mixed-partition `_bulk` body split into per-placement
@@ -46,7 +46,7 @@ dispatched accordingly:
 | `ADMIN` | `_cat`, `_cluster`, `_nodes` | refused by default; opt-in allow-list pass-through |
 
 A request whose logical index matches a configured passthrough policy skips
-this table entirely and forwards verbatim — see
+this table entirely and forwards verbatim, see
 [Choosing a Mode](/osproxy-java/10-choosing-a-mode/).
 
 ## Non-functional requirements
@@ -59,12 +59,12 @@ comparable; a Java-specific note follows where the platform changes what
 
 | Id | Requirement | Status here |
 |----|-------------|-------------|
-| NFR-P1 | Added p50 latency over direct-to-cluster stays small for a simple write. | Measured near-zero at c=1–32, up to +0.8ms at c=64 (JVM sampling noise territory) — see [Performance](/osproxy-java/11-performance/). |
+| NFR-P1 | Added p50 latency over direct-to-cluster stays small for a simple write. | Measured near-zero at c=1–32, up to +0.8ms at c=64 (JVM sampling noise territory), see [Performance](/osproxy-java/11-performance/). |
 | NFR-P2 | Added p99 latency under budget; no tail amplification from pooling. | Measured; grows with concurrency but throughput scales with it (pool reuse, not serialization). |
 | NFR-P3 | Minimal allocation on the pass-through hot path. | Not GC-budget-gated the way the Rust build is `dhat`-gated; JMH benches measure allocations/op but there is no CI budget gate yet. |
 | NFR-P4 | Upstream TLS/connection reuse under steady load. | `WebClient` pools per cluster; reuse verified qualitatively, not numerically gated. |
 | NFR-P5 | Downstream keep-alive honored; no per-request connection churn. | Default Helidon SE behavior. |
-| NFR-P6 | Idle memory footprint bounded; no unbounded buffers/queues. | Measured: idle ~11MiB (Rust) vs ~116MiB (JVM baseline) — a platform difference, not a leak; soak growth stays bounded (~2x, ~115MiB) under a capped heap. |
+| NFR-P6 | Idle memory footprint bounded; no unbounded buffers/queues. | Measured: idle ~11MiB (Rust) vs ~116MiB (JVM baseline), a platform difference, not a leak; soak growth stays bounded (~2x, ~115MiB) under a capped heap. |
 | NFR-P7 | Bulk demux is single-pass over the body. | Yes (Jackson streaming tokenization, no full-tree re-serialization on the hot path). |
 
 ### Reliability (NFR-R)
@@ -82,10 +82,10 @@ comparable; a Java-specific note follows where the platform changes what
 | Id | Requirement |
 |----|-------------|
 | NFR-T1 | Every request emits one causal trace whose spans reconstruct why it routed where it did. |
-| NFR-T2 | Default verbosity emits shapes, ids, and field names only — never tenant values, bodies, tokens, or credentials. |
+| NFR-T2 | Default verbosity emits shapes, ids, and field names only, never tenant values, bodies, tokens, or credentials. |
 | NFR-T3 | Verbosity is runtime-togglable fleet-wide without restart, targeted by tenant/index/principal/endpoint, with TTL auto-expiry. |
 | NFR-T4 | `GET /_osproxy/explain/{request_id}` returns the decision-relevant shape as one JSON document. |
-| NFR-T5 | `GET /_osproxy/breakglass` returns a bounded, in-order tape of recent captures selected by a `ring_buffer` directive — for pulling the last N failures of a class when the ids aren't known up front. |
+| NFR-T5 | `GET /_osproxy/breakglass` returns a bounded, in-order tape of recent captures selected by a `ring_buffer` directive, for pulling the last N failures of a class when the ids aren't known up front. |
 
 ### Security (NFR-S)
 

@@ -4,7 +4,7 @@ title: "3. Architecture"
 osproxy-java is a Gradle multi-module library and a reference binary
 (`osproxy-server`). You implement the SPI; the engine runs each request
 through a fixed pipeline (`Pipeline.handle`). Nothing on the hot path uses
-reflection or dynamic class loading — your `TenancySpi` and `Sink` are wired
+reflection or dynamic class loading, your `TenancySpi` and `Sink` are wired
 once in `main` and called directly.
 
 ## Request lifecycle
@@ -41,7 +41,7 @@ A few things are worth understanding about this flow.
 
 The introspection surfaces (`/_osproxy/metrics`, `/_osproxy/explain/*`,
 `/_osproxy/breakglass`, `/_osproxy/admin/directives`) short-circuit before
-authentication, and each is individually gated — `/_osproxy/explain` and
+authentication, and each is individually gated: `/_osproxy/explain` and
 `/_osproxy/breakglass` can be turned off entirely in production
 (`osproxy.debug-endpoints`), while `/_osproxy/metrics` always stays on. See
 [Observability](/osproxy-java/08-observability/).
@@ -120,17 +120,17 @@ flowchart TB
 ```
 
 `Placement` is a Java sealed interface with these three records as
-permitted subtypes — the compiler enforces the switch over placement kinds
+permitted subtypes; the compiler enforces the switch over placement kinds
 is exhaustive at every call site.
 
 ## Configuration model
 
 Configuration is typed (`ProxyConfig`, a record) and **fully validated at
-startup, before any socket opens** — a bad value is a `ConfigException`
+startup, before any socket opens**: a bad value is a `ConfigException`
 naming the field. It loads from Helidon `Config` (a YAML/properties file
 merged with `OSPROXY_*` environment overrides). Live, fleet-wide changes
 (the placement table, diagnostics directives) flow through a **polling
-control plane** at runtime instead — see
+control plane** at runtime instead, see
 [Configuration](/osproxy-java/07-configuration/) and
 [Observability & Control Plane](/osproxy-java/08-observability/).
 
@@ -140,7 +140,7 @@ This is a from-scratch port, not a line-for-line translation, and a few
 things differ by platform or by scope:
 
 - **Ingress**: HTTP/1.1 + TLS/mTLS only. No gRPC, no HTTP/2 ingress.
-- **Authorization**: no separate post-authentication `Authorizer` seam yet —
+- **Authorization**: no separate post-authentication `Authorizer` seam yet.
   `BearerAuth` resolves a `Principal`, and that's the extent of the
   built-in auth model.
 - **Streaming request/response bodies**: closed for every endpoint that
@@ -151,7 +151,7 @@ things differ by platform or by scope:
   JSON transforms (`Fields.injectFieldsStreaming`,
   `Queries.wrapQueryStreaming`) that copy the client's body straight into
   the upstream request without materializing it as a byte[] or a full
-  Jackson tree — but both of these **keep enforcing**
+  Jackson tree, but both of these **keep enforcing**
   `osproxy.max-body-bytes`: that cap is a pre-existing resource-protection
   guarantee for one request's body specifically, and streaming makes it
   possible to *keep* enforcing it without the buffering cost, not a reason
@@ -159,7 +159,7 @@ things differ by platform or by scope:
   Search's transform still reads one subtree (`aggs`/`aggregations`) as a
   tree rather than streaming it, since the unfilterable check
   (`global` aggregations) needs to see the whole clause before deciding to
-  refuse — a real structural requirement, not unported effort; every other
+  refuse, a real structural requirement, not unported effort; every other
   field streams. Scroll-open and PIT search stay on the buffered path (they
   need the body for the cursor lifecycle itself), as does async write mode
   (the queued envelope needs a complete body).
