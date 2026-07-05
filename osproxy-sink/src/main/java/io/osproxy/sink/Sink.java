@@ -17,16 +17,19 @@ public interface Sink {
     /**
      * Streaming twin of {@link #write} for a single index/create op whose
      * physical id and target are known without reading the body (index
-     * CRUD's {@code {id}}-templated placements) — the engine streams its
-     * token-level field-injection transform straight into {@code body}
-     * rather than materializing the document. Default: unsupported, so a
-     * sink that hasn't wired a real streaming transport (or {@link
-     * MemorySink}, which has no transport at all) fails closed rather than
-     * silently buffering behind the caller's back.
+     * CRUD's {@code {id}}-templated placements). {@code transform} runs
+     * directly inside the upstream write's output-stream callback — reading
+     * {@code requestBody} and writing the transformed document straight to
+     * the upstream connection, on the same thread, no intermediate pipe or
+     * second thread. Default: unsupported, so a sink that hasn't wired a
+     * real streaming transport (or {@link MemorySink}, which has no
+     * transport at all) fails closed rather than silently buffering behind
+     * the caller's back.
      */
     default WriteBatch.OpResult writeStreaming(
             Target target, boolean create, String physicalId,
-            InputStream body, Optional<String> routing) throws SinkException {
+            InputStream requestBody, StreamTransform transform, Optional<String> routing)
+            throws SinkException {
         throw new SinkException(
                 io.osproxy.core.ErrorCode.UNSUPPORTED_ENDPOINT,
                 "this sink does not support streaming writes");

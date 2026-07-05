@@ -197,14 +197,19 @@ public final class Pipeline {
     /**
      * Streaming twin of {@link #ingestDoc}, usable only when {@link
      * #supportsStreamingIngest()}: routes and resolves the injected fields
-     * from {@code ctx} alone (never the body), then pipes a token-level
-     * field-injection transform of {@code requestBody} straight into the
-     * upstream request. A background virtual thread runs the transform
-     * (parse + inject + write) into one end of a pipe while the sink reads
-     * the other end as it uploads — the document is never buffered whole at
-     * either end. The response itself is the small, already-buffered ack
-     * every ingest returns; only the (potentially large) request body
-     * streams.
+     * from {@code ctx} alone (never the body), then hands the sink a {@link
+     * io.osproxy.sink.StreamTransform} closure over {@link
+     * Fields#injectFieldsStreaming}. The sink runs that closure directly
+     * inside its upload's output-stream callback — reading {@code
+     * requestBody} and writing the transformed document straight to the
+     * upstream connection, on the same (virtual) thread that's handling
+     * this request. No pipe, no second thread: an earlier version used a
+     * {@code PipedOutputStream} plus a dedicated producer thread, measured
+     * 2-12x slower than the buffered path (see docs/11-performance.md) —
+     * pure thread-hop overhead, since Helidon already hands the destination
+     * stream to the calling thread synchronously. The response is the
+     * small, already-buffered ack every ingest returns; only the
+     * (potentially large) request body streams.
      */
     public PipelineResponse ingestDocStreaming(RequestCtx ctx, java.io.InputStream requestBody)
             throws SpiException, RewriteException, SinkException {
@@ -220,62 +225,63 @@ public final class Pipeline {
         Optional<String> routing = routing(rule, decision);
         boolean create = ctx.path().contains("/_create/");
 
-        var pipedOut = new java.io.PipedOutputStream();
-        java.io.PipedInputStream pipedIn;
-        try {
-            pipedIn = new java.io.PipedInputStream(pipedOut, 8192);
-        } catch (java.io.IOException e) {
-            return PipelineResponse.error(ErrorCode.MALFORMED_REQUEST);
-        }
-        var failure = new java.util.concurrent.atomic.AtomicReference<Exception>();
-        Thread producer = Thread.ofVirtual().start(() -> {
-            try (pipedOut) {
-                var parser = Json.MAPPER.getFactory().createParser(requestBody);
-                var generator = Json.MAPPER.getFactory().createGenerator(pipedOut);
+        io.osproxy.sink.StreamTransform transform = (in, out) -> {
+            try {
+                var parser = Json.MAPPER.getFactory().createParser(in);
+                var generator = Json.MAPPER.getFactory().createGenerator(out);
                 Fields.injectFieldsStreaming(parser, generator, inject);
                 generator.close();
-            } catch (Exception e) {
-                failure.set(e);
+            } catch (java.io.IOException e) {
+                // Distinguishes "the body was bad" from "the connection was
+                // bad" once this has propagated through Helidon's own
+                // wrapping — see TransformFailedException's doc comment.
+                throw new io.osproxy.sink.TransformFailedException(e);
             }
-        });
+        };
 
-        // The producer failing (cap exceeded, malformed json) races with the
-        // sink reading whatever partial bytes made it through before the
-        // pipe closed — that read can "succeed" against a truncated document
-        // and report its own (misleading) failure. The producer's failure is
-        // the real one and takes priority.
-        WriteBatch.OpResult result = null;
-        SinkException sinkFailure = null;
+        WriteBatch.OpResult result;
         try {
-            result = sink.writeStreaming(decision.target(), create, physicalId, pipedIn, routing);
+            result = sink.writeStreaming(decision.target(), create, physicalId, requestBody, transform, routing);
         } catch (SinkException e) {
-            sinkFailure = e;
-        } finally {
-            try {
-                producer.join();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }
-        if (failure.get() != null) {
-            if (hasCause(failure.get(), io.osproxy.core.BodyTooLargeException.class)) {
-                return PipelineResponse.error(ErrorCode.PAYLOAD_TOO_LARGE);
-            }
-            throw new RewriteException(RewriteException.Kind.INVALID_JSON, "malformed ingest body");
-        }
-        if (sinkFailure != null) {
-            throw sinkFailure;
+            return streamingFailureResponse(e, "malformed ingest body");
         }
         return ackResponse(ctx, result, logicalId);
     }
 
-    private static boolean hasCause(Throwable t, Class<? extends Throwable> type) {
+    /**
+     * Reads a {@link SinkException}'s cause chain to tell a bad body apart
+     * from a genuine upstream/network failure, which is rethrown as-is —
+     * {@code SinkException} already carries the right code for that. An
+     * over-cap body ({@link io.osproxy.core.BodyTooLargeException})
+     * resolves to a response directly; a {@link RewriteException} the
+     * transform raised (e.g. {@code Queries.wrapQueryStreaming}'s
+     * unfilterable check) is rethrown with its original {@link
+     * RewriteException.Kind} intact; anything else wrapped in {@link
+     * io.osproxy.sink.TransformFailedException} becomes a generic
+     * malformed-body refusal.
+     */
+    private static PipelineResponse streamingFailureResponse(SinkException e, String malformedMessage)
+            throws RewriteException, SinkException {
+        if (findCause(e, io.osproxy.core.BodyTooLargeException.class).isPresent()) {
+            return PipelineResponse.error(ErrorCode.PAYLOAD_TOO_LARGE);
+        }
+        Optional<RewriteException> rewriteCause = findCause(e, RewriteException.class);
+        if (rewriteCause.isPresent()) {
+            throw rewriteCause.get();
+        }
+        if (findCause(e, io.osproxy.sink.TransformFailedException.class).isPresent()) {
+            throw new RewriteException(RewriteException.Kind.INVALID_JSON, malformedMessage);
+        }
+        throw e;
+    }
+
+    private static <T extends Throwable> Optional<T> findCause(Throwable t, Class<T> type) {
         for (Throwable cur = t; cur != null; cur = cur.getCause()) {
             if (type.isInstance(cur)) {
-                return true;
+                return Optional.of(type.cast(cur));
             }
         }
-        return false;
+        return Optional.empty();
     }
 
     /** Handles one classified, authenticated request. */
@@ -589,13 +595,13 @@ public final class Pipeline {
      * index-present case: the ingress checks {@code ctx.queryParam("scroll")}
      * itself before offering this path (scroll-open and PIT search both need
      * the buffered body for their own reasons, so they stay on the buffered
-     * path — see {@code AppHandler}). Streams {@code
-     * Queries.wrapQueryStreaming}'s token-level transform straight into the
-     * upstream request the same way {@link #ingestDocStreaming} streams
-     * field injection: a background virtual thread runs the transform into
-     * one end of a pipe while the sink reads the other end as it uploads.
-     * The response is still the ordinary buffered one (shaping needs the
-     * whole tree), so only the (potentially large) request body streams.
+     * path — see {@code AppHandler}). Hands the sink a {@link
+     * io.osproxy.sink.StreamTransform} closure over {@code
+     * Queries.wrapQueryStreaming}, run directly inside the upload's
+     * output-stream callback — same thread, no pipe, no second thread (see
+     * {@link #ingestDocStreaming}'s doc comment for why that matters). The
+     * response is still the ordinary buffered one (shaping needs the whole
+     * tree), so only the (potentially large) request body streams.
      */
     public PipelineResponse searchStreaming(
             RequestCtx ctx, java.io.InputStream requestBody, boolean search)
@@ -605,82 +611,28 @@ public final class Pipeline {
                 Transforms.injectedFields(decision.transform()), decision.partition(), ctx);
 
         // A dedicated placement has nothing to wrap or screen (the buffered
-        // path's own short-circuit) — pass the body straight through with no
-        // transform at all, not even the pipe/producer-thread machinery.
-        if (filter.isEmpty()) {
-            Reader.Response verbatim;
-            try {
-                verbatim = search
-                        ? reader.searchStreaming(decision.target(), requestBody)
-                        : reader.countStreaming(decision.target(), requestBody);
-            } catch (SinkException e) {
-                // The cap-exceeding CappingInputStream throws from inside
-                // Helidon's outputStream() write, several wrapper layers
-                // below this SinkException — still worth surfacing as 413
-                // rather than a generic upstream failure.
-                if (hasCause(e, io.osproxy.core.BodyTooLargeException.class)) {
-                    return PipelineResponse.error(ErrorCode.PAYLOAD_TOO_LARGE);
-                }
-                throw e;
-            }
-            if (!verbatim.ok()) {
-                return PipelineResponse.error(ErrorCode.UPSTREAM_FAILED);
-            }
-            byte[] verbatimBody = search
-                    ? Shaping.shape(verbatim.body(), view(ctx, decision), true)
-                    : verbatim.body();
-            return new PipelineResponse(verbatim.status(), verbatimBody);
-        }
+        // path's own short-circuit) — pass the body straight through
+        // verbatim, no transform at all.
+        io.osproxy.sink.StreamTransform transform = filter.isEmpty()
+                ? io.osproxy.sink.StreamTransform.verbatim()
+                : (in, out) -> {
+                    try {
+                        var parser = Json.MAPPER.getFactory().createParser(in);
+                        var generator = Json.MAPPER.getFactory().createGenerator(out);
+                        Queries.wrapQueryStreaming(parser, generator, filter);
+                        generator.close();
+                    } catch (RewriteException | java.io.IOException e) {
+                        throw new io.osproxy.sink.TransformFailedException(e);
+                    }
+                };
 
-        var pipedOut = new java.io.PipedOutputStream();
-        java.io.PipedInputStream pipedIn;
-        try {
-            pipedIn = new java.io.PipedInputStream(pipedOut, 8192);
-        } catch (java.io.IOException e) {
-            return PipelineResponse.error(ErrorCode.MALFORMED_REQUEST);
-        }
-        var failure = new java.util.concurrent.atomic.AtomicReference<Exception>();
-        Thread producer = Thread.ofVirtual().start(() -> {
-            try (pipedOut) {
-                var parser = Json.MAPPER.getFactory().createParser(requestBody);
-                var generator = Json.MAPPER.getFactory().createGenerator(pipedOut);
-                Queries.wrapQueryStreaming(parser, generator, filter);
-                generator.close();
-            } catch (Exception e) {
-                failure.set(e);
-            }
-        });
-
-        // Same priority as ingestDocStreaming: the producer's failure (cap
-        // exceeded, unfilterable construct, malformed json) races the sink
-        // reading whatever partial bytes crossed before the pipe closed, and
-        // takes priority over that read's own (misleading) outcome.
-        Reader.Response upstream = null;
-        SinkException sinkFailure = null;
+        Reader.Response upstream;
         try {
             upstream = search
-                    ? reader.searchStreaming(decision.target(), pipedIn)
-                    : reader.countStreaming(decision.target(), pipedIn);
+                    ? reader.searchStreaming(decision.target(), requestBody, transform)
+                    : reader.countStreaming(decision.target(), requestBody, transform);
         } catch (SinkException e) {
-            sinkFailure = e;
-        } finally {
-            try {
-                producer.join();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }
-        if (failure.get() != null) {
-            if (failure.get() instanceof RewriteException re) {
-                throw re;
-            }
-            if (hasCause(failure.get(), io.osproxy.core.BodyTooLargeException.class)) {
-                return PipelineResponse.error(ErrorCode.PAYLOAD_TOO_LARGE);
-            }
-            throw new RewriteException(RewriteException.Kind.INVALID_JSON, "malformed search body");
-        }
-        if (sinkFailure != null) {
-            throw sinkFailure;
+            return streamingFailureResponse(e, "malformed search body");
         }
         if (!upstream.ok()) {
             return PipelineResponse.error(ErrorCode.UPSTREAM_FAILED);

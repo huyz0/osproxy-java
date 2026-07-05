@@ -32,7 +32,8 @@ class MemorySinkTest {
             }
         };
         org.junit.jupiter.api.Assertions.assertThrows(SinkException.class,
-                () -> sink.writeStreaming(T, false, "acme:1", brokenBody, Optional.empty()));
+                () -> sink.writeStreaming(T, false, "acme:1", brokenBody,
+                        StreamTransform.verbatim(), Optional.empty()));
     }
 
     @Test
@@ -41,10 +42,11 @@ class MemorySinkTest {
         sink.write(List.of(op(new DocOp.Index("1", "{\"m\":\"x\"}".getBytes(), Optional.empty()))));
 
         var searchResult = sink.searchStreaming(T, new java.io.ByteArrayInputStream(
-                "{\"query\":{\"match_all\":{}}}".getBytes()));
+                "{\"query\":{\"match_all\":{}}}".getBytes()), StreamTransform.verbatim());
         assertThat(searchResult.status()).isEqualTo(200);
 
-        var countResult = sink.countStreaming(T, new java.io.ByteArrayInputStream(new byte[0]));
+        var countResult = sink.countStreaming(
+                T, new java.io.ByteArrayInputStream(new byte[0]), StreamTransform.verbatim());
         assertThat(M.readTree(countResult.body()).get("count").intValue()).isEqualTo(1);
     }
 
@@ -53,7 +55,8 @@ class MemorySinkTest {
         Sink bare = ops -> new WriteBatch.Ack(List.of());
         org.junit.jupiter.api.Assertions.assertThrows(SinkException.class, () ->
                 bare.writeStreaming(T, false, "acme:1",
-                        new java.io.ByteArrayInputStream(new byte[0]), Optional.empty()));
+                        new java.io.ByteArrayInputStream(new byte[0]),
+                        StreamTransform.verbatim(), Optional.empty()));
     }
 
     @Test
@@ -62,12 +65,14 @@ class MemorySinkTest {
 
         var result = sink.writeStreaming(
                 T, false, "acme:1",
-                new java.io.ByteArrayInputStream("{\"v\":1}".getBytes()), Optional.empty());
+                new java.io.ByteArrayInputStream("{\"v\":1}".getBytes()),
+                StreamTransform.verbatim(), Optional.empty());
         assertThat(result.status()).isEqualTo(201);
 
         var conflict = sink.writeStreaming(
                 T, true, "acme:1",
-                new java.io.ByteArrayInputStream("{\"v\":2}".getBytes()), Optional.empty());
+                new java.io.ByteArrayInputStream("{\"v\":2}".getBytes()),
+                StreamTransform.verbatim(), Optional.empty());
         assertThat(conflict.status()).isEqualTo(409);
 
         assertThat(new String(sink.get(T, "acme:1", Optional.empty()).body()))

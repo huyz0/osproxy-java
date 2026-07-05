@@ -96,10 +96,10 @@ class OpenSearchSinkLoopbackTest {
         SEEN.clear();
         var indexResult = sink.writeStreaming(target, false, "acme:1",
                 new java.io.ByteArrayInputStream("{\"a\":1}".getBytes(StandardCharsets.UTF_8)),
-                Optional.of("acme"));
+                StreamTransform.verbatim(), Optional.of("acme"));
         var createResult = sink.writeStreaming(target, true, "acme:2",
                 new java.io.ByteArrayInputStream("{}".getBytes(StandardCharsets.UTF_8)),
-                Optional.empty());
+                StreamTransform.verbatim(), Optional.empty());
 
         assertThat(indexResult.status()).isEqualTo(200);
         assertThat(indexResult.physicalId()).isEqualTo("acme:1");
@@ -112,28 +112,12 @@ class OpenSearchSinkLoopbackTest {
     }
 
     @Test
-    void writeStreamingSurfacesAFailureToCloseTheSourceStream() {
-        var body = new java.io.ByteArrayInputStream("{\"a\":1}".getBytes(StandardCharsets.UTF_8)) {
-            @Override
-            public void close() throws java.io.IOException {
-                throw new java.io.IOException("close failed");
-            }
+    void writeStreamingSurfacesATransformFailureAsUpstreamFailed() {
+        StreamTransform broken = (in, out) -> {
+            throw new TransformFailedException(new java.io.IOException("bad body"));
         };
-        assertThatThrownBy(() -> sink.writeStreaming(target, false, "acme:1", body, Optional.empty()))
-                .isInstanceOf(SinkException.class)
-                .extracting(e -> ((SinkException) e).errorCode())
-                .isEqualTo(io.osproxy.core.ErrorCode.UPSTREAM_FAILED);
-    }
-
-    @Test
-    void streamingQuerySurfacesAFailureToCloseTheSourceStream() {
-        var body = new java.io.ByteArrayInputStream(new byte[0]) {
-            @Override
-            public void close() throws java.io.IOException {
-                throw new java.io.IOException("close failed");
-            }
-        };
-        assertThatThrownBy(() -> sink.searchStreaming(target, body))
+        assertThatThrownBy(() -> sink.writeStreaming(target, false, "acme:1",
+                        new java.io.ByteArrayInputStream(new byte[0]), broken, Optional.empty()))
                 .isInstanceOf(SinkException.class)
                 .extracting(e -> ((SinkException) e).errorCode())
                 .isEqualTo(io.osproxy.core.ErrorCode.UPSTREAM_FAILED);
@@ -143,8 +127,10 @@ class OpenSearchSinkLoopbackTest {
     void streamingSearchAndCountHitTheExpectedUpstreamPaths() throws Exception {
         SEEN.clear();
         sink.searchStreaming(target, new java.io.ByteArrayInputStream(
-                "{\"query\":{\"match_all\":{}}}".getBytes(StandardCharsets.UTF_8)));
-        sink.countStreaming(target, new java.io.ByteArrayInputStream(new byte[0]));
+                "{\"query\":{\"match_all\":{}}}".getBytes(StandardCharsets.UTF_8)),
+                StreamTransform.verbatim());
+        sink.countStreaming(
+                target, new java.io.ByteArrayInputStream(new byte[0]), StreamTransform.verbatim());
 
         List<Seen> seen = List.copyOf(SEEN);
         assertThat(seen).extracting(Seen::method, Seen::path).containsExactly(
@@ -183,7 +169,8 @@ class OpenSearchSinkLoopbackTest {
                 .extracting(e -> ((SinkException) e).errorCode())
                 .isEqualTo(io.osproxy.core.ErrorCode.UPSTREAM_FAILED);
         assertThatThrownBy(() -> unreachable.writeStreaming(target, false, "1",
-                        new java.io.ByteArrayInputStream(new byte[0]), Optional.empty()))
+                        new java.io.ByteArrayInputStream(new byte[0]),
+                        StreamTransform.verbatim(), Optional.empty()))
                 .isInstanceOf(SinkException.class)
                 .extracting(e -> ((SinkException) e).errorCode())
                 .isEqualTo(io.osproxy.core.ErrorCode.UPSTREAM_FAILED);

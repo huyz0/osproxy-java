@@ -44,13 +44,16 @@ public final class MemorySink implements Sink, Reader {
     @Override
     public WriteBatch.OpResult writeStreaming(
             Target target, boolean create, String physicalId,
-            java.io.InputStream body, Optional<String> routing) throws SinkException {
-        // No real transport to stream over — read the (already
-        // token-transformed) body fully and delegate to the ordinary path.
-        // Correct, not streaming: fine for a test double.
+            java.io.InputStream requestBody, StreamTransform transform, Optional<String> routing)
+            throws SinkException {
+        // No real transport to stream over — run the transform into a
+        // buffer and delegate to the ordinary path. Correct, not
+        // streaming, but exercises the same transform a real sink would.
         byte[] doc;
         try {
-            doc = body.readAllBytes();
+            var out = new java.io.ByteArrayOutputStream();
+            transform.apply(requestBody, out);
+            doc = out.toByteArray();
         } catch (IOException e) {
             throw new SinkException(io.osproxy.core.ErrorCode.MALFORMED_REQUEST, "bad stream", e);
         }
@@ -129,18 +132,25 @@ public final class MemorySink implements Sink, Reader {
     }
 
     @Override
-    public Response searchStreaming(Target target, java.io.InputStream body) throws SinkException {
-        return search(target, readFully(body));
+    public Response searchStreaming(
+            Target target, java.io.InputStream requestBody, StreamTransform transform)
+            throws SinkException {
+        return search(target, transformed(requestBody, transform));
     }
 
     @Override
-    public Response countStreaming(Target target, java.io.InputStream body) throws SinkException {
-        return count(target, readFully(body));
+    public Response countStreaming(
+            Target target, java.io.InputStream requestBody, StreamTransform transform)
+            throws SinkException {
+        return count(target, transformed(requestBody, transform));
     }
 
-    private static byte[] readFully(java.io.InputStream in) throws SinkException {
+    private static byte[] transformed(java.io.InputStream in, StreamTransform transform)
+            throws SinkException {
         try {
-            return in.readAllBytes();
+            var out = new java.io.ByteArrayOutputStream();
+            transform.apply(in, out);
+            return out.toByteArray();
         } catch (IOException e) {
             throw new SinkException(io.osproxy.core.ErrorCode.MALFORMED_REQUEST, "bad stream", e);
         }

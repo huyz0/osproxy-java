@@ -122,27 +122,21 @@ public final class OpenSearchSink implements Sink, Reader {
     @Override
     public WriteBatch.OpResult writeStreaming(
             Target target, boolean create, String physicalId,
-            java.io.InputStream body, Optional<String> routing) throws SinkException {
+            java.io.InputStream requestBody, StreamTransform transform, Optional<String> routing)
+            throws SinkException {
         WebClient client = client(target);
         String index = target.index().value();
         var req = withRouting(
                 traced(client.put("/" + index + "/" + (create ? "_create" : "_doc") + "/" + physicalId)),
                 routing)
                 .header(io.helidon.http.HeaderNames.CONTENT_TYPE, "application/json");
-        // body is the reader end of a pipe fed by a producer thread the
-        // engine owns (Pipeline.ingestDocStreaming). If the upstream write
-        // fails partway (a realistic case — a reset connection is exactly
-        // what feeds the circuit breaker below), the producer can still be
-        // blocked writing to the other end; closing body here regardless of
-        // outcome unblocks it with a broken-pipe IOException instead of
-        // leaving it stuck forever, which would in turn hang the caller's
-        // producer.join(). Never skip this, success or failure.
-        try (body) {
-            // Same piped-through pattern as forwardStreaming: the caller's
-            // already-transformed byte stream is written directly, no
-            // intermediate buffer.
+        try {
+            // transform runs right here, on this thread, reading requestBody
+            // and writing straight into Helidon's upload stream — no pipe,
+            // no second thread, no thread-hop to feed one (that pattern
+            // measured 2-12x slower than the buffered path; see docs/11).
             HttpClientResponse response = req.outputStream(os -> {
-                body.transferTo(os);
+                transform.apply(requestBody, os);
                 os.close();
             });
             try (response) {
@@ -151,9 +145,6 @@ public final class OpenSearchSink implements Sink, Reader {
                 return new WriteBatch.OpResult(response.status().code(), result, physicalId);
             }
         } catch (RuntimeException e) {
-            breaker(target).onFailure();
-            throw new SinkException(ErrorCode.UPSTREAM_FAILED, "upstream streaming write failed", e);
-        } catch (java.io.IOException e) {
             breaker(target).onFailure();
             throw new SinkException(ErrorCode.UPSTREAM_FAILED, "upstream streaming write failed", e);
         }
@@ -185,33 +176,33 @@ public final class OpenSearchSink implements Sink, Reader {
     }
 
     @Override
-    public Response searchStreaming(Target target, java.io.InputStream body) throws SinkException {
-        return streamingQuery(target, "_search", body);
+    public Response searchStreaming(
+            Target target, java.io.InputStream requestBody, StreamTransform transform)
+            throws SinkException {
+        return streamingQuery(target, "_search", requestBody, transform);
     }
 
     @Override
-    public Response countStreaming(Target target, java.io.InputStream body) throws SinkException {
-        return streamingQuery(target, "_count", body);
+    public Response countStreaming(
+            Target target, java.io.InputStream requestBody, StreamTransform transform)
+            throws SinkException {
+        return streamingQuery(target, "_count", requestBody, transform);
     }
 
-    private Response streamingQuery(Target target, String suffix, java.io.InputStream body)
+    private Response streamingQuery(
+            Target target, String suffix, java.io.InputStream requestBody, StreamTransform transform)
             throws SinkException {
         WebClient client = client(target);
-        // Same reasoning as writeStreaming: body is the reader end of a pipe
-        // fed by the engine's producer thread; close it regardless of
-        // outcome so a failed transfer unblocks the producer instead of
-        // leaving it (and the caller's producer.join()) stuck forever.
-        try (body) {
-            return request(target, () ->
-                    traced(client.post("/" + target.index().value() + "/" + suffix))
-                            .header(io.helidon.http.HeaderNames.CONTENT_TYPE, "application/json")
-                            .outputStream(os -> {
-                                body.transferTo(os);
-                                os.close();
-                            }));
-        } catch (java.io.IOException e) {
-            throw new SinkException(ErrorCode.UPSTREAM_FAILED, "closing streaming query body", e);
-        }
+        // transform runs right here, reading requestBody and writing
+        // straight into Helidon's upload stream — no pipe, no second
+        // thread; see writeStreaming's comment for why that matters.
+        return request(target, () ->
+                traced(client.post("/" + target.index().value() + "/" + suffix))
+                        .header(io.helidon.http.HeaderNames.CONTENT_TYPE, "application/json")
+                        .outputStream(os -> {
+                            transform.apply(requestBody, os);
+                            os.close();
+                        }));
     }
 
     @Override

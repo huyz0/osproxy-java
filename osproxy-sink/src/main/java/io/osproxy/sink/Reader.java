@@ -27,22 +27,24 @@ public interface Reader {
     Response count(Target target, byte[] body) throws SinkException;
 
     /**
-     * Streaming twin of {@link #search}: {@code body} is piped straight into
-     * the upstream request rather than passed as a materialized byte[] —
-     * the request-side counterpart of {@link #search}'s buffered form for a
-     * body the engine wrapped via {@code Queries.wrapQueryStreaming}. The
-     * response is still returned buffered (result shaping needs the whole
-     * tree). Default: unsupported, so a reader that hasn't wired streaming
-     * search fails closed.
+     * Streaming twin of {@link #search}: {@code transform} runs directly
+     * inside the upstream request's output-stream callback, reading {@code
+     * requestBody} and writing the wrapped query straight to the upstream
+     * connection — same thread, no pipe, no second thread. The response is
+     * still returned buffered (result shaping needs the whole tree).
+     * Default: unsupported, so a reader that hasn't wired streaming search
+     * fails closed.
      */
-    default Response searchStreaming(Target target, InputStream body) throws SinkException {
+    default Response searchStreaming(Target target, InputStream requestBody, StreamTransform transform)
+            throws SinkException {
         throw new SinkException(
                 io.osproxy.core.ErrorCode.UNSUPPORTED_ENDPOINT,
                 "this reader does not support streaming search");
     }
 
     /** Streaming twin of {@link #count}, mirroring {@link #searchStreaming}. */
-    default Response countStreaming(Target target, InputStream body) throws SinkException {
+    default Response countStreaming(Target target, InputStream requestBody, StreamTransform transform)
+            throws SinkException {
         throw new SinkException(
                 io.osproxy.core.ErrorCode.UNSUPPORTED_ENDPOINT,
                 "this reader does not support streaming count");

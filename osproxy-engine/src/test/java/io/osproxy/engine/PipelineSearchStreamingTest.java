@@ -202,12 +202,16 @@ class PipelineSearchStreamingTest {
         }
 
         @Override
-        public Response searchStreaming(Target target, InputStream body) throws SinkException {
+        public Response searchStreaming(
+                Target target, InputStream body, io.osproxy.sink.StreamTransform transform)
+                throws SinkException {
             throw failure;
         }
 
         @Override
-        public Response countStreaming(Target target, InputStream body) throws SinkException {
+        public Response countStreaming(
+                Target target, InputStream body, io.osproxy.sink.StreamTransform transform)
+                throws SinkException {
             throw failure;
         }
     }

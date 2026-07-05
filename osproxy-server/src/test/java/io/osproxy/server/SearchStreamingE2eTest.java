@@ -78,26 +78,45 @@ class SearchStreamingE2eTest {
     void aSearchBodyLargerThanTheCapIsStillRefusedWith413() throws Exception {
         var cluster = new ClusterId("primary");
         var reference = new ReferenceTenancy(cluster, new IndexName("shared"));
-        var sink = new OpenSearchSink(Map.of(cluster, "http://localhost:1"));
-        Pipeline pipeline = new Pipeline(new TenancyRouter(reference), sink, sink);
-        long tinyCap = 64;
-        WebServer proxy = WebServer.builder()
+        // A real, reachable upstream: the transform now runs inside the
+        // upload's output-stream callback, which only fires once the
+        // connection is actually established — an unreachable upstream
+        // would surface as a connection failure (502) before the cap check
+        // ever gets a chance to run, which isn't what this test is about.
+        WebServer upstream = WebServer.builder()
+                .routing((io.helidon.webserver.http.HttpRouting.Builder r) -> r.any((req, res) -> {
+                    if (req.content().hasEntity()) {
+                        req.content().as(byte[].class);
+                    }
+                    res.status(200).send("{\"hits\":{\"hits\":[]}}");
+                }))
                 .port(0)
-                .routing(new AppHandler(pipeline, new BearerAuth(Map.of()), tinyCap, false)::route)
                 .build()
                 .start();
         try {
-            var client = HttpClient.newHttpClient();
-            String bigQuery = "{\"query\":{\"terms\":{\"id\":[" + "1,".repeat(100) + "1]}}}";
-            var req = HttpRequest.newBuilder(
-                            URI.create("http://localhost:" + proxy.port() + "/shared/_search"))
-                    .POST(HttpRequest.BodyPublishers.ofString(bigQuery))
-                    .header("x-tenant", "acme")
-                    .build();
-            var resp = client.send(req, HttpResponse.BodyHandlers.ofString());
-            assertThat(resp.statusCode()).isEqualTo(413);
+            var sink = new OpenSearchSink(Map.of(cluster, "http://localhost:" + upstream.port()));
+            Pipeline pipeline = new Pipeline(new TenancyRouter(reference), sink, sink);
+            long tinyCap = 64;
+            WebServer proxy = WebServer.builder()
+                    .port(0)
+                    .routing(new AppHandler(pipeline, new BearerAuth(Map.of()), tinyCap, false)::route)
+                    .build()
+                    .start();
+            try {
+                var client = HttpClient.newHttpClient();
+                String bigQuery = "{\"query\":{\"terms\":{\"id\":[" + "1,".repeat(100) + "1]}}}";
+                var req = HttpRequest.newBuilder(
+                                URI.create("http://localhost:" + proxy.port() + "/shared/_search"))
+                        .POST(HttpRequest.BodyPublishers.ofString(bigQuery))
+                        .header("x-tenant", "acme")
+                        .build();
+                var resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+                assertThat(resp.statusCode()).isEqualTo(413);
+            } finally {
+                proxy.stop();
+            }
         } finally {
-            proxy.stop();
+            upstream.stop();
         }
     }
 
@@ -105,24 +124,39 @@ class SearchStreamingE2eTest {
     void unfilterableSearchConstructsAreStillRefusedOnTheStreamingPath() throws Exception {
         var cluster = new ClusterId("primary");
         var reference = new ReferenceTenancy(cluster, new IndexName("shared"));
-        var sink = new OpenSearchSink(Map.of(cluster, "http://localhost:1"));
-        Pipeline pipeline = new Pipeline(new TenancyRouter(reference), sink, sink);
-        WebServer proxy = WebServer.builder()
+        WebServer upstream = WebServer.builder()
+                .routing((io.helidon.webserver.http.HttpRouting.Builder r) -> r.any((req, res) -> {
+                    if (req.content().hasEntity()) {
+                        req.content().as(byte[].class);
+                    }
+                    res.status(200).send("{\"hits\":{\"hits\":[]}}");
+                }))
                 .port(0)
-                .routing(new AppHandler(pipeline, new BearerAuth(Map.of()))::route)
                 .build()
                 .start();
         try {
-            var client = HttpClient.newHttpClient();
-            var req = HttpRequest.newBuilder(
-                            URI.create("http://localhost:" + proxy.port() + "/shared/_search"))
-                    .POST(HttpRequest.BodyPublishers.ofString("{\"suggest\":{\"s\":{\"text\":\"q\"}}}"))
-                    .header("x-tenant", "acme")
-                    .build();
-            var resp = client.send(req, HttpResponse.BodyHandlers.ofString());
-            assertThat(resp.statusCode()).isEqualTo(400);
+            var sink = new OpenSearchSink(Map.of(cluster, "http://localhost:" + upstream.port()));
+            Pipeline pipeline = new Pipeline(new TenancyRouter(reference), sink, sink);
+            WebServer proxy = WebServer.builder()
+                    .port(0)
+                    .routing(new AppHandler(pipeline, new BearerAuth(Map.of()))::route)
+                    .build()
+                    .start();
+            try {
+                var client = HttpClient.newHttpClient();
+                var req = HttpRequest.newBuilder(
+                                URI.create("http://localhost:" + proxy.port() + "/shared/_search"))
+                        .POST(HttpRequest.BodyPublishers.ofString(
+                                "{\"suggest\":{\"s\":{\"text\":\"q\"}}}"))
+                        .header("x-tenant", "acme")
+                        .build();
+                var resp = client.send(req, HttpResponse.BodyHandlers.ofString());
+                assertThat(resp.statusCode()).isEqualTo(400);
+            } finally {
+                proxy.stop();
+            }
         } finally {
-            proxy.stop();
+            upstream.stop();
         }
     }
 }
