@@ -174,6 +174,28 @@ public final class OpenSearchSink implements Sink, Reader {
     }
 
     @Override
+    public Response searchStreaming(Target target, java.io.InputStream body) throws SinkException {
+        return streamingQuery(target, "_search", body);
+    }
+
+    @Override
+    public Response countStreaming(Target target, java.io.InputStream body) throws SinkException {
+        return streamingQuery(target, "_count", body);
+    }
+
+    private Response streamingQuery(Target target, String suffix, java.io.InputStream body)
+            throws SinkException {
+        WebClient client = client(target);
+        return request(target, () ->
+                traced(client.post("/" + target.index().value() + "/" + suffix))
+                        .header(io.helidon.http.HeaderNames.CONTENT_TYPE, "application/json")
+                        .outputStream(os -> {
+                            body.transferTo(os);
+                            os.close();
+                        }));
+    }
+
+    @Override
     public Response searchScroll(Target target, byte[] body, String scrollTtl)
             throws SinkException {
         WebClient client = client(target);

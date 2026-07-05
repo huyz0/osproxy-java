@@ -570,6 +570,113 @@ public final class Pipeline {
         return new PipelineResponse(upstream.status(), body);
     }
 
+    /**
+     * Streaming twin of {@link #searchOrCount}, usable only for the ordinary
+     * index-present case: the ingress checks {@code ctx.queryParam("scroll")}
+     * itself before offering this path (scroll-open and PIT search both need
+     * the buffered body for their own reasons, so they stay on the buffered
+     * path — see {@code AppHandler}). Streams {@code
+     * Queries.wrapQueryStreaming}'s token-level transform straight into the
+     * upstream request the same way {@link #ingestDocStreaming} streams
+     * field injection: a background virtual thread runs the transform into
+     * one end of a pipe while the sink reads the other end as it uploads.
+     * The response is still the ordinary buffered one (shaping needs the
+     * whole tree), so only the (potentially large) request body streams.
+     */
+    public PipelineResponse searchStreaming(
+            RequestCtx ctx, java.io.InputStream requestBody, boolean search)
+            throws SpiException, RewriteException, SinkException {
+        RouteDecision decision = router.route(ctx, null);
+        Map<String, JsonNode> filter = Transforms.resolveInjected(
+                Transforms.injectedFields(decision.transform()), decision.partition(), ctx);
+
+        // A dedicated placement has nothing to wrap or screen (the buffered
+        // path's own short-circuit) — pass the body straight through with no
+        // transform at all, not even the pipe/producer-thread machinery.
+        if (filter.isEmpty()) {
+            Reader.Response verbatim;
+            try {
+                verbatim = search
+                        ? reader.searchStreaming(decision.target(), requestBody)
+                        : reader.countStreaming(decision.target(), requestBody);
+            } catch (SinkException e) {
+                // The cap-exceeding CappingInputStream throws from inside
+                // Helidon's outputStream() write, several wrapper layers
+                // below this SinkException — still worth surfacing as 413
+                // rather than a generic upstream failure.
+                if (hasCause(e, io.osproxy.core.BodyTooLargeException.class)) {
+                    return PipelineResponse.error(ErrorCode.PAYLOAD_TOO_LARGE);
+                }
+                throw e;
+            }
+            if (!verbatim.ok()) {
+                return PipelineResponse.error(ErrorCode.UPSTREAM_FAILED);
+            }
+            byte[] verbatimBody = search
+                    ? Shaping.shape(verbatim.body(), view(ctx, decision), true)
+                    : verbatim.body();
+            return new PipelineResponse(verbatim.status(), verbatimBody);
+        }
+
+        var pipedOut = new java.io.PipedOutputStream();
+        java.io.PipedInputStream pipedIn;
+        try {
+            pipedIn = new java.io.PipedInputStream(pipedOut, 8192);
+        } catch (java.io.IOException e) {
+            return PipelineResponse.error(ErrorCode.MALFORMED_REQUEST);
+        }
+        var failure = new java.util.concurrent.atomic.AtomicReference<Exception>();
+        Thread producer = Thread.ofVirtual().start(() -> {
+            try (pipedOut) {
+                var parser = Json.MAPPER.getFactory().createParser(requestBody);
+                var generator = Json.MAPPER.getFactory().createGenerator(pipedOut);
+                Queries.wrapQueryStreaming(parser, generator, filter);
+                generator.close();
+            } catch (Exception e) {
+                failure.set(e);
+            }
+        });
+
+        // Same priority as ingestDocStreaming: the producer's failure (cap
+        // exceeded, unfilterable construct, malformed json) races the sink
+        // reading whatever partial bytes crossed before the pipe closed, and
+        // takes priority over that read's own (misleading) outcome.
+        Reader.Response upstream = null;
+        SinkException sinkFailure = null;
+        try {
+            upstream = search
+                    ? reader.searchStreaming(decision.target(), pipedIn)
+                    : reader.countStreaming(decision.target(), pipedIn);
+        } catch (SinkException e) {
+            sinkFailure = e;
+        } finally {
+            try {
+                producer.join();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        if (failure.get() != null) {
+            if (failure.get() instanceof RewriteException re) {
+                throw re;
+            }
+            if (hasCause(failure.get(), io.osproxy.core.BodyTooLargeException.class)) {
+                return PipelineResponse.error(ErrorCode.PAYLOAD_TOO_LARGE);
+            }
+            throw new RewriteException(RewriteException.Kind.INVALID_JSON, "malformed search body");
+        }
+        if (sinkFailure != null) {
+            throw sinkFailure;
+        }
+        if (!upstream.ok()) {
+            return PipelineResponse.error(ErrorCode.UPSTREAM_FAILED);
+        }
+        byte[] body = search
+                ? Shaping.shape(upstream.body(), view(ctx, decision), true)
+                : upstream.body();
+        return new PipelineResponse(upstream.status(), body);
+    }
+
     /** Whether an index-less search body carries a {@code pit} clause. */
     private static boolean bodyNamesAPit(byte[] body) {
         if (body.length == 0) {

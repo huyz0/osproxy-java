@@ -36,6 +36,19 @@ class MemorySinkTest {
     }
 
     @Test
+    void searchAndCountStreamingDelegateToTheBufferedPaths() throws Exception {
+        var sink = new MemorySink();
+        sink.write(List.of(op(new DocOp.Index("1", "{\"m\":\"x\"}".getBytes(), Optional.empty()))));
+
+        var searchResult = sink.searchStreaming(T, new java.io.ByteArrayInputStream(
+                "{\"query\":{\"match_all\":{}}}".getBytes()));
+        assertThat(searchResult.status()).isEqualTo(200);
+
+        var countResult = sink.countStreaming(T, new java.io.ByteArrayInputStream(new byte[0]));
+        assertThat(M.readTree(countResult.body()).get("count").intValue()).isEqualTo(1);
+    }
+
+    @Test
     void aSinkThatDoesNotOverrideWriteStreamingFailsClosed() {
         Sink bare = ops -> new WriteBatch.Ack(List.of());
         org.junit.jupiter.api.Assertions.assertThrows(SinkException.class, () ->

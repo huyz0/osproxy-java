@@ -228,6 +228,19 @@ public final class AppHandler {
             return;
         }
 
+        // Search/count stream too, for the ordinary index-present case:
+        // scroll-open and PIT search both need the buffered body for their
+        // own reasons (opening a cursor, or the index-less pit-clause
+        // sniff), so they're excluded here and fall through to the
+        // buffered path below like every other endpoint.
+        if ((classified.endpoint() == io.osproxy.core.EndpointKind.SEARCH
+                || classified.endpoint() == io.osproxy.core.EndpointKind.COUNT)
+                && classified.logicalIndex().isPresent()
+                && !req.query().contains("scroll")) {
+            streamSearch(req, res, classified, method.get(), principal.get());
+            return;
+        }
+
         // Bound the working set before buffering. A declared over-cap length
         // refuses immediately; a chunked body (no Content-Length) is read
         // incrementally and cut off the moment it crosses the cap, so the
@@ -347,6 +360,48 @@ public final class AppHandler {
                 ? new CappingInputStream(req.content().inputStream(), maxBodyBytes)
                 : java.io.InputStream.nullInputStream()) {
             PipelineResponse out = pipeline.ingestDocStreaming(ctx, in);
+            record(ctx, res, out, System.nanoTime() - started);
+            send(res, out);
+        } catch (io.osproxy.spi.SpiException e) {
+            send(res, PipelineResponse.error(e.errorCode()));
+        } catch (io.osproxy.rewrite.RewriteException e) {
+            send(res, PipelineResponse.error(ErrorCode.MALFORMED_REQUEST));
+        } catch (io.osproxy.sink.SinkException e) {
+            send(res, PipelineResponse.error(e.errorCode()));
+        } catch (Exception e) {
+            send(res, PipelineResponse.error(ErrorCode.UPSTREAM_FAILED));
+        }
+    }
+
+    /**
+     * Streams a search/count: the client body is piped through {@link
+     * Pipeline#searchStreaming}'s token-level query-wrapping transform
+     * straight to the upstream request, so the query is never buffered as a
+     * byte[] or a Jackson tree — except the {@code aggs}/{@code
+     * aggregations} clause, which the transform reads as a tree to run the
+     * unfilterable check (see {@code Queries.wrapQueryStreaming}). Like
+     * {@link #streamIngest}, {@code maxBodyBytes} still applies (same
+     * {@link CappingInputStream}): the cap protects against one oversized
+     * request body, and search bodies are ordinarily small queries, not the
+     * legitimately-large aggregate payloads passthrough/{@code _bulk} exist
+     * to escape. The response is the ordinary buffered one (shaping needs
+     * the whole tree); only the request body streams.
+     */
+    private void streamSearch(
+            ServerRequest req, ServerResponse res, Classify.Classified classified,
+            RequestCtx.HttpMethod method, Principal principal) {
+        List<Map.Entry<String, String>> headers = new ArrayList<>();
+        req.headers().forEach(h -> headers.add(Map.entry(h.name(), h.values())));
+        RequestCtx ctx = new RequestCtx(
+                method, req.path().rawPath(), classified.endpoint(),
+                classified.logicalIndex(), classified.docId(),
+                headers, new byte[0], principal, req.query().rawValue());
+        long started = System.nanoTime();
+        boolean search = classified.endpoint() == io.osproxy.core.EndpointKind.SEARCH;
+        try (java.io.InputStream in = req.content().hasEntity()
+                ? new CappingInputStream(req.content().inputStream(), maxBodyBytes)
+                : java.io.InputStream.nullInputStream()) {
+            PipelineResponse out = pipeline.searchStreaming(ctx, in, search);
             record(ctx, res, out, System.nanoTime() - started);
             send(res, out);
         } catch (io.osproxy.spi.SpiException e) {

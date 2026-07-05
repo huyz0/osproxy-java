@@ -53,8 +53,12 @@ public final class Fields {
         generator.writeEndObject();
     }
 
-    /** Recursively copies the value the parser currently points at. */
-    private static void copyValue(
+    /**
+     * Recursively copies the value the parser currently points at. Package-
+     * visible so {@link Queries}'s streaming twin can reuse it for the
+     * top-level fields it passes through untouched.
+     */
+    static void copyValue(
             com.fasterxml.jackson.core.JsonParser parser,
             com.fasterxml.jackson.core.JsonGenerator generator) throws java.io.IOException {
         switch (parser.currentToken()) {

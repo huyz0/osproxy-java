@@ -143,23 +143,26 @@ things differ by platform or by scope:
 - **Authorization**: no separate post-authentication `Authorizer` seam yet —
   `BearerAuth` resolves a `Principal`, and that's the extent of the
   built-in auth model.
-- **Streaming request/response bodies**: closed for every write path;
-  search is the one still open. Passthrough streams both directions
-  verbatim. Tenanted `_bulk` parses and dispatches one NDJSON item at a
-  time, so it isn't bound by `osproxy.max-body-bytes` at all. Single-doc
-  ingest (`_doc`/`_create`) now streams too, when the tenancy config makes
-  it possible — see `Pipeline#supportsStreamingIngest` — using a
-  token-level JSON transform (`Fields.injectFieldsStreaming`) that copies
-  the client's document straight into the upstream request without ever
-  materializing it as a byte[] or a Jackson tree, but it still enforces
+- **Streaming request/response bodies**: closed for every endpoint that
+  reads a request body. Passthrough streams both directions verbatim, not
+  bound by `osproxy.max-body-bytes` at all. Tenanted `_bulk` parses and
+  dispatches one NDJSON item at a time, also unbound by the cap. Single-doc
+  ingest (`_doc`/`_create`) and search/count all stream via token-level
+  JSON transforms (`Fields.injectFieldsStreaming`,
+  `Queries.wrapQueryStreaming`) that copy the client's body straight into
+  the upstream request without materializing it as a byte[] or a full
+  Jackson tree — but both of these **keep enforcing**
   `osproxy.max-body-bytes`: that cap is a pre-existing resource-protection
-  guarantee for single documents specifically, and streaming makes it
+  guarantee for one request's body specifically, and streaming makes it
   possible to *keep* enforcing it without the buffering cost, not a reason
   to drop it (see [Choosing a Mode](/osproxy-java/10-choosing-a-mode/)).
-  Search still buffers up to the cap: wrapping the client's query needs to
-  inspect the whole top-level object first (to detect unfilterable
-  constructs like `suggest`), which is a real structural blocker, not just
-  unported effort.
+  Search's transform still reads one subtree (`aggs`/`aggregations`) as a
+  tree rather than streaming it, since the unfilterable check
+  (`global` aggregations) needs to see the whole clause before deciding to
+  refuse — a real structural requirement, not unported effort; every other
+  field streams. Scroll-open and PIT search stay on the buffered path (they
+  need the body for the cursor lifecycle itself), as does async write mode
+  (the queued envelope needs a complete body).
 - **etcd-backed control plane**: the Rust project has a reference
   `EtcdDirectiveStore`; the Java port uses HTTP-polling stores
   (`PollingDirectiveStore`/`PollingPlacementStore`) against any HTTP source

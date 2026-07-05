@@ -64,6 +64,60 @@ class FieldsAndQueriesTest {
     }
 
     @Test
+    void wrapQueryStreamingMatchesTheBufferedShapeForAClientQuery() throws Exception {
+        byte[] result = streamWrap(
+                "{\"query\":{\"match\":{\"msg\":\"hi\"}},\"size\":5}",
+                Map.of("_tenant", TextNode.valueOf("acme")));
+        JsonNode doc = Json.MAPPER.readTree(result);
+        assertThat(doc.at("/query/bool/must/0/match/msg").textValue()).isEqualTo("hi");
+        assertThat(doc.at("/query/bool/filter/0/term/_tenant").textValue()).isEqualTo("acme");
+        assertThat(doc.get("size").intValue()).isEqualTo(5);
+    }
+
+    @Test
+    void wrapQueryStreamingSynthesizesMatchAllWhenNoQueryField() throws Exception {
+        byte[] result = streamWrap("", Map.of("_tenant", TextNode.valueOf("acme")));
+        JsonNode doc = Json.MAPPER.readTree(result);
+        assertThat(doc.at("/query/bool/must/0").has("match_all")).isTrue();
+        assertThat(doc.at("/query/bool/filter/0/term/_tenant").textValue()).isEqualTo("acme");
+    }
+
+    @Test
+    void wrapQueryStreamingRefusesSuggestAndGlobalAggJustLikeTheBufferedPath() {
+        var filter = Map.<String, JsonNode>of("_tenant", TextNode.valueOf("acme"));
+        assertThatThrownBy(() -> streamWrap("{\"suggest\":{\"s\":{\"text\":\"q\"}}}", filter))
+                .isInstanceOf(RewriteException.class)
+                .extracting(e -> ((RewriteException) e).kind())
+                .isEqualTo(RewriteException.Kind.UNFILTERABLE);
+        assertThatThrownBy(() -> streamWrap(
+                        "{\"aggs\":{\"all\":{\"global\":{},\"aggs\":{\"n\":{\"value_count\":{\"field\":\"x\"}}}}}}",
+                        filter))
+                .isInstanceOf(RewriteException.class)
+                .extracting(e -> ((RewriteException) e).kind())
+                .isEqualTo(RewriteException.Kind.UNFILTERABLE);
+    }
+
+    @Test
+    void wrapQueryStreamingPassesANonGlobalAggThrough() throws Exception {
+        byte[] result = streamWrap(
+                "{\"aggs\":{\"n\":{\"value_count\":{\"field\":\"x\"}}}}",
+                Map.of("_tenant", TextNode.valueOf("acme")));
+        JsonNode doc = Json.MAPPER.readTree(result);
+        assertThat(doc.at("/aggs/n/value_count/field").textValue()).isEqualTo("x");
+        assertThat(doc.at("/query/bool/filter/0/term/_tenant").textValue()).isEqualTo("acme");
+    }
+
+    private static byte[] streamWrap(String source, Map<String, JsonNode> filter)
+            throws java.io.IOException, RewriteException {
+        var parser = Json.MAPPER.getFactory().createParser(source.getBytes());
+        var out = new java.io.ByteArrayOutputStream();
+        var generator = Json.MAPPER.getFactory().createGenerator(out);
+        Queries.wrapQueryStreaming(parser, generator, filter);
+        generator.close();
+        return out.toByteArray();
+    }
+
+    @Test
     void wrapQueryEnclosesClientQueryAndPinsFilter() throws Exception {
         byte[] wrapped = Queries.wrapQuery(
                 "{\"query\":{\"match\":{\"msg\":\"hi\"}},\"size\":5}".getBytes(),

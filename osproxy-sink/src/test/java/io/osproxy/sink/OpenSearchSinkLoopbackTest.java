@@ -112,6 +112,20 @@ class OpenSearchSinkLoopbackTest {
     }
 
     @Test
+    void streamingSearchAndCountHitTheExpectedUpstreamPaths() throws Exception {
+        SEEN.clear();
+        sink.searchStreaming(target, new java.io.ByteArrayInputStream(
+                "{\"query\":{\"match_all\":{}}}".getBytes(StandardCharsets.UTF_8)));
+        sink.countStreaming(target, new java.io.ByteArrayInputStream(new byte[0]));
+
+        List<Seen> seen = List.copyOf(SEEN);
+        assertThat(seen).extracting(Seen::method, Seen::path).containsExactly(
+                org.assertj.core.groups.Tuple.tuple("POST", "/orders/_search"),
+                org.assertj.core.groups.Tuple.tuple("POST", "/orders/_count"));
+        assertThat(seen.get(0).body()).isEqualTo("{\"query\":{\"match_all\":{}}}");
+    }
+
+    @Test
     void readsHitGetSearchAndCount() throws Exception {
         SEEN.clear();
         sink.get(target, "acme:1", Optional.of("acme"));

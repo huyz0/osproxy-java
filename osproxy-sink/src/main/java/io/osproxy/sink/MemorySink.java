@@ -128,6 +128,24 @@ public final class MemorySink implements Sink, Reader {
         return new Response(200, out.toString().getBytes());
     }
 
+    @Override
+    public Response searchStreaming(Target target, java.io.InputStream body) throws SinkException {
+        return search(target, readFully(body));
+    }
+
+    @Override
+    public Response countStreaming(Target target, java.io.InputStream body) throws SinkException {
+        return count(target, readFully(body));
+    }
+
+    private static byte[] readFully(java.io.InputStream in) throws SinkException {
+        try {
+            return in.readAllBytes();
+        } catch (IOException e) {
+            throw new SinkException(io.osproxy.core.ErrorCode.MALFORMED_REQUEST, "bad stream", e);
+        }
+    }
+
     private List<Map.Entry<String, ObjectNode>> evaluate(Target target, byte[] body)
             throws SinkException {
         JsonNode query = body.length == 0 ? null : parse(body).get("query");

@@ -39,12 +39,15 @@ Performance page).
 
 Single-doc ingest streams as well, when eligible — the physical target and
 id have to be derivable from the request alone (no `PartitionKeySpec.BodyField`
-partition key), which the reference tenancy satisfies. Unlike passthrough
-and `_bulk`, ingest keeps enforcing `osproxy.max-body-bytes`: that cap
-protects against one oversized document specifically, and streaming here
-is about dropping the *buffering cost* up to the cap, not the cap itself.
-Search still buffers fully, since wrapping the client's query needs the
-whole top-level object to check for unfilterable constructs first.
+partition key), which the reference tenancy satisfies. Search and count
+stream too, for the ordinary index-present case (scroll-open and PIT
+search stay buffered, since both need the body for the cursor lifecycle
+itself). Unlike passthrough and `_bulk`, ingest and search/count both keep
+enforcing `osproxy.max-body-bytes`: that cap protects against one oversized
+request specifically, and streaming here is about dropping the *buffering
+cost* up to the cap, not the cap itself — a document or query search body
+is not the kind of legitimately-large aggregate payload passthrough/`_bulk`
+exist to escape.
 
 ## Sync vs async writes
 

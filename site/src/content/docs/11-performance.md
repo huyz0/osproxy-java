@@ -127,10 +127,20 @@ unmodified, still green), since that NFR predates streaming and streaming
 doesn't get to silently drop it. Eligibility (`Pipeline.supportsStreamingIngest`)
 depends on the physical target and id being derivable without reading the
 body — true for the reference tenancy, false only for a body-derived
-partition key. Search still buffers up to the cap (`AppHandler.readCapped`):
-wrapping the client's query needs the whole top-level object up front to
-check for unfilterable constructs, a real structural blocker rather than
-unported effort.
+partition key.
+
+Search and count close the same gap the same way:
+`Queries.wrapQueryStreaming` streams the client's query into the
+`bool`/`must`/`filter` enclosure token by token (`SearchStreamingE2eTest`
+proves the wrapped shape lands on the wire correctly), except the one
+`aggs`/`aggregations` clause, read as a tree because the unfilterable check
+needs to see the whole subtree before deciding to refuse — proven
+unaffected on the streaming path too
+(`unfilterableSearchConstructsAreStillRefusedOnTheStreamingPath`). Search also
+keeps enforcing `osproxy.max-body-bytes`
+(`aSearchBodyLargerThanTheCapIsStillRefusedWith413`): a query is not the
+kind of legitimately-large aggregate payload passthrough/`_bulk` exist to
+escape, so the cap stays.
 
 ## Connection handling
 
