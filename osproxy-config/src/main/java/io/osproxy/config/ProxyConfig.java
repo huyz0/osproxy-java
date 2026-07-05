@@ -435,6 +435,12 @@ public record ProxyConfig(
         if (maxBodyBytes <= 0) {
             throw new ConfigException("max-body-bytes must be positive");
         }
+        if (directivesPollSeconds <= 0) {
+            throw new ConfigException("directives-poll-seconds must be positive");
+        }
+        if (placementsPollSeconds <= 0) {
+            throw new ConfigException("placements-poll-seconds must be positive");
+        }
         if (requireTlsForMutation && tls.isEmpty()) {
             throw new ConfigException(
                     "require-tls-for-mutation needs a tls listener (every mutation would 403)");

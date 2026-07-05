@@ -66,4 +66,32 @@ class RequestCtxTest {
         assertThat(ctx(List.of()).rawQuery()).isEmpty();
         assertThat(ctx(List.of()).queryParam("scroll")).isEmpty();
     }
+
+    @Test
+    void equalsAndHashCodeCompareBodyContentNotArrayIdentity() {
+        // A record's default equals/hashCode use byte[] reference identity,
+        // so two structurally-identical requests built from separate arrays
+        // would otherwise compare unequal — RequestCtx overrides both to
+        // compare content instead.
+        var a = ctx(List.of(Map.entry("x-tenant", "acme")));
+        var b = ctx(List.of(Map.entry("x-tenant", "acme")));
+        assertThat(a).isEqualTo(b);
+        assertThat(a.hashCode()).isEqualTo(b.hashCode());
+        assertThat(a.body()).isNotSameAs(b.body());
+
+        var differentBody = new RequestCtx(
+                a.method(), a.path(), a.endpoint(), a.logicalIndex(), a.docId(), a.headers(),
+                "{\"different\":true}".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                a.principal());
+        assertThat(a).isNotEqualTo(differentBody);
+        assertThat(a).isNotEqualTo("not a RequestCtx");
+    }
+
+    @Test
+    void toStringRendersBodyLengthNotRawBytes() {
+        var ctx = ctx(List.of());
+        assertThat(ctx.toString())
+                .contains("body=2 bytes")
+                .doesNotContain("[B@");
+    }
 }

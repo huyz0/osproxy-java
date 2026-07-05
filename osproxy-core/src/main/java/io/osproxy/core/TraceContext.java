@@ -31,7 +31,11 @@ public record TraceContext(String traceId, String spanId, boolean sampled) {
         // W3C: parse future versions leniently (>= 4 fields, any known-shape
         // version except the invalid ff), reading the fields we understand.
         String[] parts = traceparent.strip().split("-");
-        if (parts.length < 4 || !parts[0].matches("[0-9a-f]{2}") || parts[0].equals("ff")) {
+        // The flags field is spec'd as exactly 2 hex chars; Integer.parseInt
+        // alone would happily accept "0" or a 12-char garbage string as long
+        // as every char is a hex digit, silently taking a malformed field.
+        if (parts.length < 4 || !parts[0].matches("[0-9a-f]{2}") || parts[0].equals("ff")
+                || !parts[3].matches("[0-9a-f]{2}")) {
             return Optional.empty();
         }
         try {

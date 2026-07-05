@@ -77,6 +77,43 @@ public record RequestCtx(
         return Optional.empty();
     }
 
+    // Records derive equals/hashCode/toString from every component by
+    // reflection; for a byte[] that means reference identity (two requests
+    // with byte-for-byte identical bodies in different arrays compare
+    // unequal) and a useless "[B@somehash" in toString. Overridden here so
+    // structural equality actually compares content, and so nothing dumps a
+    // raw (possibly large) body into a log line.
+    @Override
+    public boolean equals(Object o) {
+        if (!(o instanceof RequestCtx other)) {
+            return false;
+        }
+        return method == other.method
+                && path.equals(other.path)
+                && endpoint == other.endpoint
+                && logicalIndex.equals(other.logicalIndex)
+                && docId.equals(other.docId)
+                && headers.equals(other.headers)
+                && java.util.Arrays.equals(body, other.body)
+                && principal.equals(other.principal)
+                && rawQuery.equals(other.rawQuery);
+    }
+
+    @Override
+    public int hashCode() {
+        int result = java.util.Objects.hash(
+                method, path, endpoint, logicalIndex, docId, headers, principal, rawQuery);
+        return 31 * result + java.util.Arrays.hashCode(body);
+    }
+
+    @Override
+    public String toString() {
+        return "RequestCtx[method=" + method + ", path=" + path + ", endpoint=" + endpoint
+                + ", logicalIndex=" + logicalIndex + ", docId=" + docId + ", headers=" + headers
+                + ", body=" + body.length + " bytes, principal=" + principal
+                + ", rawQuery=" + rawQuery + "]";
+    }
+
     /** The HTTP method vocabulary the proxy accepts. */
     public enum HttpMethod {
         GET,

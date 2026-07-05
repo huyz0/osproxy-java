@@ -52,4 +52,21 @@ public final class BearerAuth {
         }
         return Optional.ofNullable(matched);
     }
+
+    /**
+     * Whether {@code authorization} presents the single {@code expected}
+     * bearer token — case-insensitive scheme, constant-time comparison. The
+     * one shared implementation for every "check a bearer token against a
+     * fixed secret" call site (e.g. the admin directives endpoint), so a
+     * future fix here (a normalization change, a timing hardening) can't
+     * land on one call site and miss another.
+     */
+    public static boolean matches(Optional<String> authorization, String expected) {
+        return authorization
+                .filter(h -> h.regionMatches(true, 0, "Bearer ", 0, 7))
+                .map(h -> h.substring(7).strip())
+                .map(t -> MessageDigest.isEqual(
+                        t.getBytes(StandardCharsets.UTF_8), expected.getBytes(StandardCharsets.UTF_8)))
+                .orElse(false);
+    }
 }

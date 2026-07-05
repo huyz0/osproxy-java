@@ -548,13 +548,8 @@ public final class AppHandler {
             send(res, PipelineResponse.error(ErrorCode.UNAUTHORIZED));
             return;
         }
-        boolean authorized = req.headers().first(HeaderNames.AUTHORIZATION)
-                .filter(h -> h.regionMatches(true, 0, "Bearer ", 0, 7))
-                .map(h -> h.substring(7).strip())
-                .map(t -> java.security.MessageDigest.isEqual(
-                        t.getBytes(java.nio.charset.StandardCharsets.UTF_8),
-                        adminToken.get().getBytes(java.nio.charset.StandardCharsets.UTF_8)))
-                .orElse(false);
+        boolean authorized = BearerAuth.matches(
+                req.headers().first(HeaderNames.AUTHORIZATION), adminToken.get());
         if (!authorized) {
             send(res, PipelineResponse.error(ErrorCode.AUTH_FAILED));
             return;
