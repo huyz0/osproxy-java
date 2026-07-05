@@ -309,11 +309,17 @@ public final class AppHandler {
             io.osproxy.engine.PassthroughPolicy policy) {
         long started = System.nanoTime();
         String requestId = java.util.HexFormat.of().formatHex(randomBytes(8));
+        // Tracks the status once the upstream responded, so a failure while
+        // streaming the body back (after headers already committed) is still
+        // recorded under the status the client actually saw, not silently
+        // dropped from observability.
+        int[] committedStatus = {-1};
         try (java.io.InputStream reqBody = req.content().hasEntity()
                 ? req.content().inputStream() : java.io.InputStream.nullInputStream()) {
             try (var streamed = pipeline.reader().forwardStreaming(
                     policy.target(), method, req.path().rawPath(), req.query().rawValue(),
                     reqBody, List.of())) {
+                committedStatus[0] = streamed.status();
                 res.status(Status.create(streamed.status()))
                         .header(HeaderNames.create(REQUEST_ID_HEADER), requestId);
                 try (var out = res.outputStream()) {
@@ -323,6 +329,12 @@ public final class AppHandler {
                         streamed.status(), Optional.empty(), System.nanoTime() - started);
             }
         } catch (Exception e) {
+            boolean committed = committedStatus[0] >= 0;
+            int status = committed ? committedStatus[0] : ErrorCode.UPSTREAM_FAILED.httpStatus();
+            Optional<String> errorCode = committed
+                    ? Optional.empty() : Optional.of(ErrorCode.UPSTREAM_FAILED.wireName());
+            recordCompletion(requestId, classified, method, principal,
+                    status, errorCode, System.nanoTime() - started);
             if (!res.isSent()) {
                 send(res, PipelineResponse.error(ErrorCode.UPSTREAM_FAILED));
             }
@@ -363,14 +375,21 @@ public final class AppHandler {
             record(ctx, res, out, System.nanoTime() - started);
             send(res, out);
         } catch (io.osproxy.spi.SpiException e) {
-            send(res, PipelineResponse.error(e.errorCode()));
+            recordAndSend(ctx, res, e.errorCode(), System.nanoTime() - started);
         } catch (io.osproxy.rewrite.RewriteException e) {
-            send(res, PipelineResponse.error(ErrorCode.MALFORMED_REQUEST));
+            recordAndSend(ctx, res, ErrorCode.MALFORMED_REQUEST, System.nanoTime() - started);
         } catch (io.osproxy.sink.SinkException e) {
-            send(res, PipelineResponse.error(e.errorCode()));
+            recordAndSend(ctx, res, e.errorCode(), System.nanoTime() - started);
         } catch (Exception e) {
-            send(res, PipelineResponse.error(ErrorCode.UPSTREAM_FAILED));
+            recordAndSend(ctx, res, ErrorCode.UPSTREAM_FAILED, System.nanoTime() - started);
         }
+    }
+
+    /** Records a failure (so streaming failures are as observable as the buffered path's) and sends it. */
+    private void recordAndSend(RequestCtx ctx, ServerResponse res, ErrorCode code, long durationNanos) {
+        PipelineResponse err = PipelineResponse.error(code);
+        record(ctx, res, err, durationNanos);
+        send(res, err);
     }
 
     /**
@@ -405,13 +424,13 @@ public final class AppHandler {
             record(ctx, res, out, System.nanoTime() - started);
             send(res, out);
         } catch (io.osproxy.spi.SpiException e) {
-            send(res, PipelineResponse.error(e.errorCode()));
+            recordAndSend(ctx, res, e.errorCode(), System.nanoTime() - started);
         } catch (io.osproxy.rewrite.RewriteException e) {
-            send(res, PipelineResponse.error(ErrorCode.MALFORMED_REQUEST));
+            recordAndSend(ctx, res, ErrorCode.MALFORMED_REQUEST, System.nanoTime() - started);
         } catch (io.osproxy.sink.SinkException e) {
-            send(res, PipelineResponse.error(e.errorCode()));
+            recordAndSend(ctx, res, e.errorCode(), System.nanoTime() - started);
         } catch (Exception e) {
-            send(res, PipelineResponse.error(ErrorCode.UPSTREAM_FAILED));
+            recordAndSend(ctx, res, ErrorCode.UPSTREAM_FAILED, System.nanoTime() - started);
         }
     }
 
@@ -480,6 +499,10 @@ public final class AppHandler {
             try {
                 stream = pipeline.openBulkStream(ctx, in);
             } catch (io.osproxy.rewrite.RewriteException e) {
+                recordCompletion(requestId, classified, method, principal,
+                        ErrorCode.MALFORMED_REQUEST.httpStatus(),
+                        Optional.of(ErrorCode.MALFORMED_REQUEST.wireName()),
+                        System.nanoTime() - started);
                 send(res, PipelineResponse.error(ErrorCode.MALFORMED_REQUEST));
                 return;
             }
@@ -492,11 +515,18 @@ public final class AppHandler {
                 // Once the output stream is requested, the status/headers are
                 // already committed — there is no error status left to send,
                 // only a best-effort truncation of the response already sent.
+                // The client did see a 200, so that's what gets recorded.
+                recordCompletion(requestId, classified, method, principal, 200, Optional.empty(),
+                        System.nanoTime() - started);
                 return;
             }
             recordCompletion(requestId, classified, method, principal, 200, Optional.empty(),
                     System.nanoTime() - started);
         } catch (Exception e) {
+            recordCompletion(requestId, classified, method, principal,
+                    ErrorCode.UPSTREAM_FAILED.httpStatus(),
+                    Optional.of(ErrorCode.UPSTREAM_FAILED.wireName()),
+                    System.nanoTime() - started);
             if (!res.isSent()) {
                 send(res, PipelineResponse.error(ErrorCode.UPSTREAM_FAILED));
             }

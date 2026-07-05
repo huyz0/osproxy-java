@@ -87,11 +87,13 @@ class PipelineAsyncWriteTest {
         var sink = new MemorySink();
         var recorder = new RecordingSink();
 
-        // No sink wired: 503, never a fake 202.
+        // No queue configured at all: 422 (distinct from a transient 503 —
+        // retrying won't help, the proxy genuinely isn't set up for async),
+        // never a fake 202.
         var noSink = pipeline(sink, null);
         assertThat(noSink.handle(asyncRequest(
                         HttpMethod.PUT, "/orders/_doc/1", "{}".getBytes()))
-                .status()).isEqualTo(503);
+                .status()).isEqualTo(422);
 
         // Broker refuses the ack: 503.
         recorder.failing = true;

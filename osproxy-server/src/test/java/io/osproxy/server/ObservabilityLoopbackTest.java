@@ -99,6 +99,61 @@ class ObservabilityLoopbackTest {
     }
 
     @Test
+    void aFailedStreamingRequestIsStillRecordedNotSilentlyDropped() throws Exception {
+        var observability = new Observability(16, Optional.empty());
+        MemorySink sink = new MemorySink();
+        Pipeline pipeline = new Pipeline(
+                new TenancyRouter(new ReferenceTenancy(
+                        new ClusterId("primary"), new IndexName("shared"))),
+                sink, sink);
+        WebServer server = WebServer.builder()
+                .port(0)
+                .routing(new AppHandler(
+                        pipeline, new BearerAuth(Map.of()),
+                        1 << 20, false, observability)::route)
+                .build()
+                .start();
+        try {
+            var client = HttpClient.newHttpClient();
+            String base = "http://localhost:" + server.port();
+
+            // Streaming ingest (see AppHandler.streamIngest) hits a malformed
+            // body — the failure must still show up in /metrics and
+            // /debug/explain, not silently skip observability just because
+            // it failed on the streaming path.
+            var bad = HttpRequest.newBuilder(URI.create(base + "/orders/_doc/1"))
+                    .PUT(HttpRequest.BodyPublishers.ofString("not json"))
+                    .header("x-tenant", "acme")
+                    .build();
+            var badResp = client.send(bad, HttpResponse.BodyHandlers.ofString());
+            assertThat(badResp.statusCode()).isEqualTo(400);
+            String requestId = badResp.headers()
+                    .firstValue(AppHandler.REQUEST_ID_HEADER).orElseThrow();
+
+            var metrics = client.send(
+                    HttpRequest.newBuilder(URI.create(base + AppHandler.METRICS_PATH))
+                            .GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertThat(metrics.body())
+                    .contains("\"requests_total\":1")
+                    .contains("\"requests_client_error\":1");
+
+            var explain = client.send(
+                    HttpRequest.newBuilder(
+                                    URI.create(base + AppHandler.EXPLAIN_PREFIX + requestId))
+                            .GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertThat(explain.statusCode()).isEqualTo(200);
+            assertThat(explain.body())
+                    .contains("\"endpoint\":\"ingest-doc\"")
+                    .contains("\"status\":400")
+                    .contains("\"error\":\"malformed_request\"");
+        } finally {
+            server.stop();
+        }
+    }
+
+    @Test
     void tracesArePropagatedToTheUpstreamAndChained() throws Exception {
         // A loopback "upstream" recording the traceparent it receives.
         AtomicReference<String> seenTraceparent = new AtomicReference<>();

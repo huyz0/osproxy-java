@@ -292,15 +292,23 @@ public final class Pipeline {
                 // writes and delete-by-query, and only when a durable sink is
                 // wired. Delete-by-query has its own checks below (different
                 // response shapes matching its own refuse-don't-lie contract),
-                // so it is exempted from this generic gate.
+                // so it is exempted from this generic gate. Status codes and
+                // body shape match the Rust project's own
+                // unsupported_response (400)/unavailable_response (422)
+                // exactly — a missing queue is refused, never
+                // accepted-and-dropped, and 422 is a distinct signal from a
+                // transient 503 (the config genuinely won't work, retrying
+                // won't help).
+                String index = ctx.logicalIndex().orElse("");
                 if (ctx.endpoint() != io.osproxy.core.EndpointKind.INGEST_DOC
                         && ctx.endpoint() != io.osproxy.core.EndpointKind.DELETE_BY_ID
                         && ctx.endpoint() != io.osproxy.core.EndpointKind.DELETE_BY_QUERY) {
-                    return PipelineResponse.error(ErrorCode.UNSUPPORTED_ENDPOINT);
+                    return asyncUnsupported(
+                            "async write mode is not supported for this endpoint", index);
                 }
                 if (ctx.endpoint() != io.osproxy.core.EndpointKind.DELETE_BY_QUERY
                         && asyncSink.isEmpty()) {
-                    return PipelineResponse.error(ErrorCode.UPSTREAM_UNAVAILABLE);
+                    return asyncUnavailable(index);
                 }
             }
             return switch (ctx.endpoint()) {
@@ -378,13 +386,13 @@ public final class Pipeline {
             throws SpiException, RewriteException, SinkException {
         String index = ctx.logicalIndex().orElse("");
         if (!AsyncWrites.wantsAsync(ctx)) {
-            return dbqUnsupported("delete_by_query is only supported in async write mode", index);
+            return asyncUnsupported("delete_by_query is only supported in async write mode", index);
         }
         if (!deleteByQueryExpansionEnabled) {
-            return dbqUnsupported("delete_by_query expansion is not enabled on this proxy", index);
+            return asyncUnsupported("delete_by_query expansion is not enabled on this proxy", index);
         }
         if (asyncSink.isEmpty()) {
-            return dbqUnavailable(index);
+            return asyncUnavailable(index);
         }
 
         RouteDecision decision = router.route(ctx, null);
@@ -407,7 +415,7 @@ public final class Pipeline {
         }
         long total = doc.path("hits").path("total").path("value").asLong(0);
         if (total > DBQ_MAX_MATCHES) {
-            return dbqUnsupported("delete_by_query match set exceeds the proxy cap", index);
+            return asyncUnsupported("delete_by_query match set exceeds the proxy cap", index);
         }
 
         Optional<String> routing = routing(Transforms.idRule(decision.transform()), decision);
@@ -452,7 +460,8 @@ public final class Pipeline {
         return Json.writeBytes(doc);
     }
 
-    private static PipelineResponse dbqUnsupported(String reason, String index) {
+    /** The {@code 400} shared by every "this op can't be honored in async mode" case. */
+    private static PipelineResponse asyncUnsupported(String reason, String index) {
         ObjectNode out = Json.MAPPER.createObjectNode();
         out.put("status", "rejected");
         out.put("error", reason);
@@ -460,7 +469,12 @@ public final class Pipeline {
         return new PipelineResponse(400, Json.writeBytes(out));
     }
 
-    private static PipelineResponse dbqUnavailable(String index) {
+    /**
+     * The {@code 422} for "async mode was requested but no queue is
+     * configured" — distinct from a {@code 503}: retrying won't help, the
+     * proxy genuinely isn't set up for it.
+     */
+    private static PipelineResponse asyncUnavailable(String index) {
         ObjectNode out = Json.MAPPER.createObjectNode();
         out.put("status", "rejected");
         out.put("error", "async write mode is not available on this proxy");

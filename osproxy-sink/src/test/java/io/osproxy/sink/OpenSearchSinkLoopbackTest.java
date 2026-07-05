@@ -112,6 +112,34 @@ class OpenSearchSinkLoopbackTest {
     }
 
     @Test
+    void writeStreamingSurfacesAFailureToCloseTheSourceStream() {
+        var body = new java.io.ByteArrayInputStream("{\"a\":1}".getBytes(StandardCharsets.UTF_8)) {
+            @Override
+            public void close() throws java.io.IOException {
+                throw new java.io.IOException("close failed");
+            }
+        };
+        assertThatThrownBy(() -> sink.writeStreaming(target, false, "acme:1", body, Optional.empty()))
+                .isInstanceOf(SinkException.class)
+                .extracting(e -> ((SinkException) e).errorCode())
+                .isEqualTo(io.osproxy.core.ErrorCode.UPSTREAM_FAILED);
+    }
+
+    @Test
+    void streamingQuerySurfacesAFailureToCloseTheSourceStream() {
+        var body = new java.io.ByteArrayInputStream(new byte[0]) {
+            @Override
+            public void close() throws java.io.IOException {
+                throw new java.io.IOException("close failed");
+            }
+        };
+        assertThatThrownBy(() -> sink.searchStreaming(target, body))
+                .isInstanceOf(SinkException.class)
+                .extracting(e -> ((SinkException) e).errorCode())
+                .isEqualTo(io.osproxy.core.ErrorCode.UPSTREAM_FAILED);
+    }
+
+    @Test
     void streamingSearchAndCountHitTheExpectedUpstreamPaths() throws Exception {
         SEEN.clear();
         sink.searchStreaming(target, new java.io.ByteArrayInputStream(
