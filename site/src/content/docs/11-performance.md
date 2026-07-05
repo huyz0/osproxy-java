@@ -114,8 +114,23 @@ dispatches and comes back `201`. `AppHandler.streamBulk` →
 `Pipeline.openBulkStream`/`MultiOps.bulkStreaming` parses and dispatches one
 NDJSON item at a time, so the request is never buffered whole either —
 `_bulk`'s existing line-oriented framing made it the second endpoint class to
-close after passthrough. Single-doc ingest and search still buffer up to the
-cap (`AppHandler.readCapped`).
+close after passthrough.
+
+Single-doc ingest closes the memory-buffering side of the same gap, but
+deliberately keeps the cap: `Fields.injectFieldsStreaming` copies the
+client's document token by token into a pipe that `OpenSearchSink.writeStreaming`
+uploads directly, so a document up to `osproxy.max-body-bytes` costs one
+streaming pass instead of a buffer copy plus a full Jackson tree — but a
+document *over* the cap is still refused with `413`
+(`IngressHardeningTest.overCapBodiesAreRefusedWith413` — pre-existing,
+unmodified, still green), since that NFR predates streaming and streaming
+doesn't get to silently drop it. Eligibility (`Pipeline.supportsStreamingIngest`)
+depends on the physical target and id being derivable without reading the
+body — true for the reference tenancy, false only for a body-derived
+partition key. Search still buffers up to the cap (`AppHandler.readCapped`):
+wrapping the client's query needs the whole top-level object up front to
+check for unfilterable constructs, a real structural blocker rather than
+unported effort.
 
 ## Connection handling
 

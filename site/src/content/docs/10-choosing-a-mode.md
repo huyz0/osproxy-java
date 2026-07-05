@@ -35,7 +35,16 @@ body through a 1 KiB-capped proxy). Tenanted `_bulk` streams too, despite
 still running tenancy resolution and the per-item transform: it parses and
 dispatches one NDJSON item at a time instead of buffering the whole payload,
 so it escapes the cap on the same terms as passthrough (proof also on the
-Performance page). Single-doc ingest and search still buffer up to the cap.
+Performance page).
+
+Single-doc ingest streams as well, when eligible — the physical target and
+id have to be derivable from the request alone (no `PartitionKeySpec.BodyField`
+partition key), which the reference tenancy satisfies. Unlike passthrough
+and `_bulk`, ingest keeps enforcing `osproxy.max-body-bytes`: that cap
+protects against one oversized document specifically, and streaming here
+is about dropping the *buffering cost* up to the cap, not the cap itself.
+Search still buffers fully, since wrapping the client's query needs the
+whole top-level object to check for unfilterable constructs first.
 
 ## Sync vs async writes
 

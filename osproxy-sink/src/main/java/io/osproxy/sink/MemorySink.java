@@ -41,6 +41,25 @@ public final class MemorySink implements Sink, Reader {
         return new WriteBatch.Ack(results);
     }
 
+    @Override
+    public WriteBatch.OpResult writeStreaming(
+            Target target, boolean create, String physicalId,
+            java.io.InputStream body, Optional<String> routing) throws SinkException {
+        // No real transport to stream over — read the (already
+        // token-transformed) body fully and delegate to the ordinary path.
+        // Correct, not streaming: fine for a test double.
+        byte[] doc;
+        try {
+            doc = body.readAllBytes();
+        } catch (IOException e) {
+            throw new SinkException(io.osproxy.core.ErrorCode.MALFORMED_REQUEST, "bad stream", e);
+        }
+        DocOp op = create
+                ? new DocOp.Create(physicalId, doc, routing)
+                : new DocOp.Index(physicalId, doc, routing);
+        return apply(new WriteBatch.Op(target, op, io.osproxy.core.Epoch.INITIAL));
+    }
+
     private WriteBatch.OpResult apply(WriteBatch.Op op) throws SinkException {
         DocKey key = key(op.target(), op.op().physicalId());
         switch (op.op()) {

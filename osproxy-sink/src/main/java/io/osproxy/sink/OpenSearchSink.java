@@ -120,6 +120,35 @@ public final class OpenSearchSink implements Sink, Reader {
     }
 
     @Override
+    public WriteBatch.OpResult writeStreaming(
+            Target target, boolean create, String physicalId,
+            java.io.InputStream body, Optional<String> routing) throws SinkException {
+        WebClient client = client(target);
+        String index = target.index().value();
+        var req = withRouting(
+                traced(client.put("/" + index + "/" + (create ? "_create" : "_doc") + "/" + physicalId)),
+                routing)
+                .header(io.helidon.http.HeaderNames.CONTENT_TYPE, "application/json");
+        try {
+            // Same piped-through pattern as forwardStreaming: the caller's
+            // already-transformed byte stream is written directly, no
+            // intermediate buffer.
+            HttpClientResponse response = req.outputStream(os -> {
+                body.transferTo(os);
+                os.close();
+            });
+            try (response) {
+                breaker(target).onSuccess();
+                String result = response.status().code() < 300 ? "ok" : "error";
+                return new WriteBatch.OpResult(response.status().code(), result, physicalId);
+            }
+        } catch (RuntimeException e) {
+            breaker(target).onFailure();
+            throw new SinkException(ErrorCode.UPSTREAM_FAILED, "upstream streaming write failed", e);
+        }
+    }
+
+    @Override
     public Response get(Target target, String physicalId, Optional<String> routing)
             throws SinkException {
         WebClient client = client(target);

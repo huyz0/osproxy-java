@@ -24,6 +24,46 @@ class FieldsAndQueriesTest {
     }
 
     @Test
+    void injectFieldsStreamingCopiesNestedStructuresAndAppendsFields() throws Exception {
+        String source = "{\"a\":1,\"nested\":{\"b\":[1,2,{\"c\":\"d\"}]},\"arr\":[]}";
+        var parser = Json.MAPPER.getFactory().createParser(source.getBytes());
+        var out = new java.io.ByteArrayOutputStream();
+        var generator = Json.MAPPER.getFactory().createGenerator(out);
+        Fields.injectFieldsStreaming(parser, generator, Map.of("_tenant", TextNode.valueOf("acme")));
+        generator.close();
+
+        JsonNode doc = Json.MAPPER.readTree(out.toByteArray());
+        assertThat(doc.get("a").intValue()).isEqualTo(1);
+        assertThat(doc.at("/nested/b/2/c").textValue()).isEqualTo("d");
+        assertThat(doc.get("arr").isArray()).isTrue();
+        assertThat(doc.get("_tenant").textValue()).isEqualTo("acme");
+    }
+
+    @Test
+    void injectFieldsStreamingLastFieldWinsOnAClientSpoofedName() throws Exception {
+        String source = "{\"_tenant\":\"spoofed\",\"msg\":\"hi\"}";
+        var parser = Json.MAPPER.getFactory().createParser(source.getBytes());
+        var out = new java.io.ByteArrayOutputStream();
+        var generator = Json.MAPPER.getFactory().createGenerator(out);
+        Fields.injectFieldsStreaming(parser, generator, Map.of("_tenant", TextNode.valueOf("acme")));
+        generator.close();
+
+        // Last-field-wins JSON parsing resolves the duplicate key to the
+        // injected value, exactly like the buffered injectFields overwrite.
+        JsonNode doc = Json.MAPPER.readTree(out.toByteArray());
+        assertThat(doc.get("_tenant").textValue()).isEqualTo("acme");
+    }
+
+    @Test
+    void injectFieldsStreamingRefusesANonObjectTopLevel() {
+        assertThatThrownBy(() -> {
+            var p = Json.MAPPER.getFactory().createParser("[1,2]".getBytes());
+            var g = Json.MAPPER.getFactory().createGenerator(new java.io.ByteArrayOutputStream());
+            Fields.injectFieldsStreaming(p, g, Map.of());
+        }).isInstanceOf(java.io.IOException.class);
+    }
+
+    @Test
     void wrapQueryEnclosesClientQueryAndPinsFilter() throws Exception {
         byte[] wrapped = Queries.wrapQuery(
                 "{\"query\":{\"match\":{\"msg\":\"hi\"}},\"size\":5}".getBytes(),

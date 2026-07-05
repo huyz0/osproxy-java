@@ -92,6 +92,26 @@ class OpenSearchSinkLoopbackTest {
     }
 
     @Test
+    void writeStreamingHitsTheExpectedUpstreamPathForIndexAndCreate() throws Exception {
+        SEEN.clear();
+        var indexResult = sink.writeStreaming(target, false, "acme:1",
+                new java.io.ByteArrayInputStream("{\"a\":1}".getBytes(StandardCharsets.UTF_8)),
+                Optional.of("acme"));
+        var createResult = sink.writeStreaming(target, true, "acme:2",
+                new java.io.ByteArrayInputStream("{}".getBytes(StandardCharsets.UTF_8)),
+                Optional.empty());
+
+        assertThat(indexResult.status()).isEqualTo(200);
+        assertThat(indexResult.physicalId()).isEqualTo("acme:1");
+        List<Seen> seen = List.copyOf(SEEN);
+        assertThat(seen).extracting(Seen::method, Seen::path).containsExactly(
+                org.assertj.core.groups.Tuple.tuple("PUT", "/orders/_doc/acme:1?routing=acme"),
+                org.assertj.core.groups.Tuple.tuple("PUT", "/orders/_create/acme:2"));
+        assertThat(seen.get(0).body()).isEqualTo("{\"a\":1}");
+        assertThat(createResult.status()).isEqualTo(200);
+    }
+
+    @Test
     void readsHitGetSearchAndCount() throws Exception {
         SEEN.clear();
         sink.get(target, "acme:1", Optional.of("acme"));
@@ -117,6 +137,11 @@ class OpenSearchSinkLoopbackTest {
         var unreachable = new OpenSearchSink(Map.of(
                 new ClusterId("c1"), "http://localhost:1"));
         assertThatThrownBy(() -> unreachable.search(target, new byte[0]))
+                .isInstanceOf(SinkException.class)
+                .extracting(e -> ((SinkException) e).errorCode())
+                .isEqualTo(io.osproxy.core.ErrorCode.UPSTREAM_FAILED);
+        assertThatThrownBy(() -> unreachable.writeStreaming(target, false, "1",
+                        new java.io.ByteArrayInputStream(new byte[0]), Optional.empty()))
                 .isInstanceOf(SinkException.class)
                 .extracting(e -> ((SinkException) e).errorCode())
                 .isEqualTo(io.osproxy.core.ErrorCode.UPSTREAM_FAILED);

@@ -162,6 +162,122 @@ public final class Pipeline {
         return reader;
     }
 
+    /**
+     * Whether {@link #ingestDocStreaming} is usable for this proxy's
+     * tenancy: the physical target and id must be derivable without reading
+     * the document at all, since streaming means the sink starts uploading
+     * before the whole body has arrived. That rules out a body-derived
+     * partition key ({@link io.osproxy.spi.PartitionKeySpec.BodyField}).
+     * {@code DocIdRule} always requires an {@code {id}} placeholder (its
+     * compact constructor enforces it), so the doc-id side is never actually
+     * body-derived in practice — the check is kept anyway as the one thing
+     * that would make streaming genuinely impossible if that constraint ever
+     * loosened. Every other configuration (including the reference tenancy)
+     * qualifies.
+     */
+    public boolean supportsStreamingIngest() {
+        if (needsBody(router.spi().partitionKeySpec())) {
+            return false;
+        }
+        return router.spi().docIdRule()
+                .map(rule -> rule.template().contains("{id}"))
+                .orElse(true);
+    }
+
+    private static boolean needsBody(io.osproxy.spi.PartitionKeySpec spec) {
+        return switch (spec) {
+            case io.osproxy.spi.PartitionKeySpec.BodyField ignored -> true;
+            case io.osproxy.spi.PartitionKeySpec.AnyOf(var sources) ->
+                    sources.stream().anyMatch(Pipeline::needsBody);
+            case io.osproxy.spi.PartitionKeySpec.Header ignored -> false;
+            case io.osproxy.spi.PartitionKeySpec.PrincipalAttr ignored -> false;
+        };
+    }
+
+    /**
+     * Streaming twin of {@link #ingestDoc}, usable only when {@link
+     * #supportsStreamingIngest()}: routes and resolves the injected fields
+     * from {@code ctx} alone (never the body), then pipes a token-level
+     * field-injection transform of {@code requestBody} straight into the
+     * upstream request. A background virtual thread runs the transform
+     * (parse + inject + write) into one end of a pipe while the sink reads
+     * the other end as it uploads — the document is never buffered whole at
+     * either end. The response itself is the small, already-buffered ack
+     * every ingest returns; only the (potentially large) request body
+     * streams.
+     */
+    public PipelineResponse ingestDocStreaming(RequestCtx ctx, java.io.InputStream requestBody)
+            throws SpiException, RewriteException, SinkException {
+        RouteDecision decision = router.route(ctx, null);
+        if (!router.spi().admitWrite(decision.partition(), decision.epoch())) {
+            return PipelineResponse.error(ErrorCode.STALE_EPOCH);
+        }
+        Map<String, JsonNode> inject = Transforms.resolveInjected(
+                Transforms.injectedFields(decision.transform()), decision.partition(), ctx);
+        Optional<DocIdRule> rule = Transforms.idRule(decision.transform());
+        String logicalId = ctx.docId().orElseGet(() -> UUID.randomUUID().toString());
+        String physicalId = mapId(rule, decision, logicalId);
+        Optional<String> routing = routing(rule, decision);
+        boolean create = ctx.path().contains("/_create/");
+
+        var pipedOut = new java.io.PipedOutputStream();
+        java.io.PipedInputStream pipedIn;
+        try {
+            pipedIn = new java.io.PipedInputStream(pipedOut, 8192);
+        } catch (java.io.IOException e) {
+            return PipelineResponse.error(ErrorCode.MALFORMED_REQUEST);
+        }
+        var failure = new java.util.concurrent.atomic.AtomicReference<Exception>();
+        Thread producer = Thread.ofVirtual().start(() -> {
+            try (pipedOut) {
+                var parser = Json.MAPPER.getFactory().createParser(requestBody);
+                var generator = Json.MAPPER.getFactory().createGenerator(pipedOut);
+                Fields.injectFieldsStreaming(parser, generator, inject);
+                generator.close();
+            } catch (Exception e) {
+                failure.set(e);
+            }
+        });
+
+        // The producer failing (cap exceeded, malformed json) races with the
+        // sink reading whatever partial bytes made it through before the
+        // pipe closed — that read can "succeed" against a truncated document
+        // and report its own (misleading) failure. The producer's failure is
+        // the real one and takes priority.
+        WriteBatch.OpResult result = null;
+        SinkException sinkFailure = null;
+        try {
+            result = sink.writeStreaming(decision.target(), create, physicalId, pipedIn, routing);
+        } catch (SinkException e) {
+            sinkFailure = e;
+        } finally {
+            try {
+                producer.join();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        if (failure.get() != null) {
+            if (hasCause(failure.get(), io.osproxy.core.BodyTooLargeException.class)) {
+                return PipelineResponse.error(ErrorCode.PAYLOAD_TOO_LARGE);
+            }
+            throw new RewriteException(RewriteException.Kind.INVALID_JSON, "malformed ingest body");
+        }
+        if (sinkFailure != null) {
+            throw sinkFailure;
+        }
+        return ackResponse(ctx, result, logicalId);
+    }
+
+    private static boolean hasCause(Throwable t, Class<? extends Throwable> type) {
+        for (Throwable cur = t; cur != null; cur = cur.getCause()) {
+            if (type.isInstance(cur)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** Handles one classified, authenticated request. */
     public PipelineResponse handle(RequestCtx ctx) {
         try {

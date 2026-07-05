@@ -218,6 +218,16 @@ public final class AppHandler {
             return;
         }
 
+        // Single-doc ingest streams too, but only when the physical target
+        // and id don't require reading the document first (see
+        // Pipeline#supportsStreamingIngest) — that's a property of the
+        // tenancy configuration, checked once per request, not the body.
+        if (classified.endpoint() == io.osproxy.core.EndpointKind.INGEST_DOC
+                && pipeline.supportsStreamingIngest()) {
+            streamIngest(req, res, classified, method.get(), principal.get());
+            return;
+        }
+
         // Bound the working set before buffering. A declared over-cap length
         // refuses immediately; a chunked body (no Content-Length) is read
         // incrementally and cut off the moment it crosses the cap, so the
@@ -302,6 +312,87 @@ public final class AppHandler {
         } catch (Exception e) {
             if (!res.isSent()) {
                 send(res, PipelineResponse.error(ErrorCode.UPSTREAM_FAILED));
+            }
+        }
+    }
+
+    /**
+     * Streams a single-doc ingest: the client body is piped through {@link
+     * Pipeline#ingestDocStreaming}'s token-level field injection straight to
+     * the upstream request, so the document is never buffered as a byte[]
+     * or a Jackson tree. Unlike {@link #streamBulk}/{@link
+     * #streamPassthrough}, {@code maxBodyBytes} still applies here, wrapped
+     * onto the input via {@link CappingInputStream}: that cap is a
+     * pre-existing resource-protection guarantee for the single-doc case
+     * specifically, and this change doesn't get to silently drop it just
+     * because streaming makes it technically possible to. The win is still
+     * real — documents up to the cap no longer cost a buffer copy plus a
+     * full tree materialization, just the one streaming pass. The response
+     * is the normal small ack every ingest returns; only the request body
+     * streams, so any failure (over cap, malformed body, upstream trouble)
+     * still gets an ordinary error status, since nothing is written to the
+     * client until the whole upload finishes.
+     */
+    private void streamIngest(
+            ServerRequest req, ServerResponse res, Classify.Classified classified,
+            RequestCtx.HttpMethod method, Principal principal) {
+        List<Map.Entry<String, String>> headers = new ArrayList<>();
+        req.headers().forEach(h -> headers.add(Map.entry(h.name(), h.values())));
+        RequestCtx ctx = new RequestCtx(
+                method, req.path().rawPath(), classified.endpoint(),
+                classified.logicalIndex(), classified.docId(),
+                headers, new byte[0], principal, req.query().rawValue());
+        long started = System.nanoTime();
+        try (java.io.InputStream in = req.content().hasEntity()
+                ? new CappingInputStream(req.content().inputStream(), maxBodyBytes)
+                : java.io.InputStream.nullInputStream()) {
+            PipelineResponse out = pipeline.ingestDocStreaming(ctx, in);
+            record(ctx, res, out, System.nanoTime() - started);
+            send(res, out);
+        } catch (io.osproxy.spi.SpiException e) {
+            send(res, PipelineResponse.error(e.errorCode()));
+        } catch (io.osproxy.rewrite.RewriteException e) {
+            send(res, PipelineResponse.error(ErrorCode.MALFORMED_REQUEST));
+        } catch (io.osproxy.sink.SinkException e) {
+            send(res, PipelineResponse.error(e.errorCode()));
+        } catch (Exception e) {
+            send(res, PipelineResponse.error(ErrorCode.UPSTREAM_FAILED));
+        }
+    }
+
+    /** Throws {@link io.osproxy.core.BodyTooLargeException} once more than {@code cap} bytes are read. */
+    private static final class CappingInputStream extends java.io.FilterInputStream {
+        private final long cap;
+        private long seen;
+
+        CappingInputStream(java.io.InputStream in, long cap) {
+            super(in);
+            this.cap = cap;
+        }
+
+        @Override
+        public int read() throws java.io.IOException {
+            int b = super.read();
+            if (b >= 0) {
+                check(1);
+            }
+            return b;
+        }
+
+        @Override
+        public int read(byte[] b, int off, int len) throws java.io.IOException {
+            int n = super.read(b, off, len);
+            if (n > 0) {
+                check(n);
+            }
+            return n;
+        }
+
+        private void check(int n) throws java.io.IOException {
+            seen += n;
+            if (seen > cap) {
+                throw new io.osproxy.core.BodyTooLargeException(
+                        "streamed ingest body exceeded the configured cap");
             }
         }
     }

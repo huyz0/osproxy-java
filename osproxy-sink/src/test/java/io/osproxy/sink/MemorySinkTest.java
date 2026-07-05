@@ -23,6 +23,45 @@ class MemorySinkTest {
     }
 
     @Test
+    void writeStreamingWrapsAReadFailureAsAMalformedRequest() {
+        var sink = new MemorySink();
+        var brokenBody = new java.io.InputStream() {
+            @Override
+            public int read() throws java.io.IOException {
+                throw new java.io.IOException("boom");
+            }
+        };
+        org.junit.jupiter.api.Assertions.assertThrows(SinkException.class,
+                () -> sink.writeStreaming(T, false, "acme:1", brokenBody, Optional.empty()));
+    }
+
+    @Test
+    void aSinkThatDoesNotOverrideWriteStreamingFailsClosed() {
+        Sink bare = ops -> new WriteBatch.Ack(List.of());
+        org.junit.jupiter.api.Assertions.assertThrows(SinkException.class, () ->
+                bare.writeStreaming(T, false, "acme:1",
+                        new java.io.ByteArrayInputStream(new byte[0]), Optional.empty()));
+    }
+
+    @Test
+    void writeStreamingDelegatesToTheOrdinaryIndexAndCreatePaths() throws Exception {
+        var sink = new MemorySink();
+
+        var result = sink.writeStreaming(
+                T, false, "acme:1",
+                new java.io.ByteArrayInputStream("{\"v\":1}".getBytes()), Optional.empty());
+        assertThat(result.status()).isEqualTo(201);
+
+        var conflict = sink.writeStreaming(
+                T, true, "acme:1",
+                new java.io.ByteArrayInputStream("{\"v\":2}".getBytes()), Optional.empty());
+        assertThat(conflict.status()).isEqualTo(409);
+
+        assertThat(new String(sink.get(T, "acme:1", Optional.empty()).body()))
+                .contains("\"v\":1");
+    }
+
+    @Test
     void indexCreateUpdateDeleteLifecycle() throws Exception {
         var sink = new MemorySink();
 
