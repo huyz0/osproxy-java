@@ -130,11 +130,12 @@ public final class OpenSearchSink implements Sink, Reader {
                 traced(client.put("/" + index + "/" + (create ? "_create" : "_doc") + "/" + physicalId)),
                 routing)
                 .header(io.helidon.http.HeaderNames.CONTENT_TYPE, "application/json");
-        try {
+        try (requestBody) {
             // transform runs right here, on this thread, reading requestBody
             // and writing straight into Helidon's upload stream — no pipe,
-            // no second thread, no thread-hop to feed one (that pattern
-            // measured 2-12x slower than the buffered path; see docs/11).
+            // no second thread. requestBody is closed here regardless of
+            // outcome; a transform is only obligated to read it, not close
+            // it (io.osproxy.sink.StreamTransform.verbatim() doesn't).
             HttpClientResponse response = req.outputStream(os -> {
                 transform.apply(requestBody, os);
                 os.close();
@@ -144,7 +145,7 @@ public final class OpenSearchSink implements Sink, Reader {
                 String result = response.status().code() < 300 ? "ok" : "error";
                 return new WriteBatch.OpResult(response.status().code(), result, physicalId);
             }
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | java.io.IOException e) {
             breaker(target).onFailure();
             throw new SinkException(ErrorCode.UPSTREAM_FAILED, "upstream streaming write failed", e);
         }
@@ -196,13 +197,19 @@ public final class OpenSearchSink implements Sink, Reader {
         // transform runs right here, reading requestBody and writing
         // straight into Helidon's upload stream — no pipe, no second
         // thread; see writeStreaming's comment for why that matters.
-        return request(target, () ->
-                traced(client.post("/" + target.index().value() + "/" + suffix))
-                        .header(io.helidon.http.HeaderNames.CONTENT_TYPE, "application/json")
-                        .outputStream(os -> {
-                            transform.apply(requestBody, os);
-                            os.close();
-                        }));
+        // requestBody is closed here regardless of outcome, same reasoning
+        // as writeStreaming (a transform is only obligated to read it).
+        try (requestBody) {
+            return request(target, () ->
+                    traced(client.post("/" + target.index().value() + "/" + suffix))
+                            .header(io.helidon.http.HeaderNames.CONTENT_TYPE, "application/json")
+                            .outputStream(os -> {
+                                transform.apply(requestBody, os);
+                                os.close();
+                            }));
+        } catch (java.io.IOException e) {
+            throw new SinkException(ErrorCode.UPSTREAM_FAILED, "upstream streaming query failed", e);
+        }
     }
 
     @Override

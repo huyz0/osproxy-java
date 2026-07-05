@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Mode;
@@ -37,14 +38,19 @@ import org.openjdk.jmh.annotations.Param;
 import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
+import org.openjdk.jmh.annotations.Threads;
 
 /**
- * Streaming vs. buffered, at two levels: the token-level transforms alone
- * (no pipe, no thread — just parser/generator vs. tree), and the full
- * {@code Pipeline} path used in production (which for the streaming case
- * spins up a {@code PipedOutputStream}/virtual-thread producer per call —
- * the one cost the transform-only numbers below don't include). Run both
- * families together to see where the pipe/thread handoff actually costs:
+ * Streaming vs. buffered ingest, at two levels: the token-level transforms
+ * alone (parser/generator vs. tree, single-threaded), and the full
+ * {@code Pipeline} call as it actually runs in production — where the
+ * transform runs inline inside the upstream client's output-stream
+ * callback, on the same (virtual) thread that's already writing the
+ * request, so there's no pipe and no extra thread to account for. The
+ * concurrent variants below share one {@code Pipeline}/{@code MemorySink}
+ * across threads, the same way one proxy instance serves many concurrent
+ * requests, to see whether either path has any shared-state contention the
+ * single-threaded numbers can't reveal.
  *
  * <pre>./gradlew :osproxy-jmh:jmh -Pjmh.includes=Streaming</pre>
  */
@@ -140,11 +146,10 @@ public class StreamingTransformBench {
     }
 
     @Benchmark
-    public int streamingParseBulkDrained(BulkState state) {
-        var reader = new java.io.BufferedReader(
-                new java.io.InputStreamReader(
-                        new ByteArrayInputStream(state.bulkPayload), StandardCharsets.UTF_8));
-        var items = Bulk.parseBulkStream(reader);
+    public int streamingParseBulkDrained(BulkState state) throws Exception {
+        var parser = Json.MAPPER.getFactory().createParser(
+                new ByteArrayInputStream(state.bulkPayload));
+        var items = Bulk.parseBulkStream(parser);
         int count = 0;
         while (items.hasNext()) {
             items.next();
@@ -163,7 +168,7 @@ public class StreamingTransformBench {
 
         Pipeline pipeline;
         byte[] doc;
-        int counter;
+        AtomicInteger counter;
 
         @Setup
         public void build() {
@@ -189,6 +194,7 @@ public class StreamingTransformBench {
             };
             var sink = new MemorySink();
             pipeline = new Pipeline(new TenancyRouter(spi), sink, sink);
+            counter = new AtomicInteger();
         }
 
         RequestCtx ctx(String id) {
@@ -202,15 +208,16 @@ public class StreamingTransformBench {
     }
 
     // MemorySink never evicts, so a monotonically increasing id across a
-    // 10s JMH iteration (millions of ops for small docs) would grow it
-    // unbounded and OOM the fork; cycling through a small pool means every
-    // op after the first lap is an overwrite (an Index, same cost shape),
-    // keeping the sink's footprint bounded regardless of iteration length.
+    // 10s JMH iteration (millions of ops for small docs, times up to 8
+    // concurrent threads) would grow it unbounded and OOM the fork; cycling
+    // through a small pool means every op past the first lap is an
+    // overwrite (an Index, same cost shape), keeping the sink's footprint
+    // bounded regardless of iteration length or thread count.
     private static final int ID_POOL = 1000;
 
     @Benchmark
     public Object pipelineIngestBuffered(PipelineState state) throws Exception {
-        String id = "buf-" + (state.counter++ % ID_POOL);
+        String id = "buf-" + (state.counter.getAndIncrement() % ID_POOL);
         RequestCtx base = state.ctx(id);
         RequestCtx ctx = new RequestCtx(
                 base.method(), base.path(), base.endpoint(),
@@ -220,8 +227,26 @@ public class StreamingTransformBench {
 
     @Benchmark
     public Object pipelineIngestStreaming(PipelineState state) throws Exception {
-        String id = "str-" + (state.counter++ % ID_POOL);
+        String id = "str-" + (state.counter.getAndIncrement() % ID_POOL);
         return state.pipeline.ingestDocStreaming(
                 state.ctx(id), new ByteArrayInputStream(state.doc));
+    }
+
+    // ---- concurrent: one Pipeline/MemorySink shared across 8 threads, the
+    // same sharing shape a real proxy instance has under load. Isolates any
+    // contention (lock, CAS, allocator) the single-threaded numbers above
+    // can't show, since JMH runs those with exactly one thread hitting the
+    // shared state at a time. ----
+
+    @Benchmark
+    @Threads(8)
+    public Object pipelineIngestBufferedConcurrent(PipelineState state) throws Exception {
+        return pipelineIngestBuffered(state);
+    }
+
+    @Benchmark
+    @Threads(8)
+    public Object pipelineIngestStreamingConcurrent(PipelineState state) throws Exception {
+        return pipelineIngestStreaming(state);
     }
 }

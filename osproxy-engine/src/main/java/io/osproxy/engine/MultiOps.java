@@ -80,9 +80,9 @@ final class MultiOps {
      * Bulk#parseBulkStream} uses back into the checked {@link
      * RewriteException} it wraps.
      */
-    static java.util.Iterator<Bulk.Item> peekBulkStream(java.io.BufferedReader reader)
+    static java.util.Iterator<Bulk.Item> peekBulkStream(com.fasterxml.jackson.core.JsonParser parser)
             throws RewriteException {
-        java.util.Iterator<Bulk.Item> items = Bulk.parseBulkStream(reader);
+        java.util.Iterator<Bulk.Item> items = Bulk.parseBulkStream(parser);
         try {
             if (!items.hasNext()) {
                 throw new RewriteException(

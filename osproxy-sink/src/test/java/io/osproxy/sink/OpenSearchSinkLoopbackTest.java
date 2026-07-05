@@ -124,6 +124,28 @@ class OpenSearchSinkLoopbackTest {
     }
 
     @Test
+    void aTransformThatWritesSomeBytesThenThrowsStillSurfacesAsUpstreamFailed() {
+        // Proves the generator/out-stream close on the failure path (see
+        // Pipeline's streaming transforms) doesn't swallow or corrupt the
+        // failure: a transform can flush partial output before hitting a
+        // bad token, and the caller still sees a clean SinkException.
+        StreamTransform partialThenBroken = (in, out) -> {
+            try {
+                out.write("{\"partial\":true".getBytes(StandardCharsets.UTF_8));
+                out.flush();
+            } catch (java.io.IOException e) {
+                throw new TransformFailedException(e);
+            }
+            throw new TransformFailedException(new java.io.IOException("truncated body"));
+        };
+        assertThatThrownBy(() -> sink.writeStreaming(target, false, "acme:1",
+                        new java.io.ByteArrayInputStream(new byte[0]), partialThenBroken, Optional.empty()))
+                .isInstanceOf(SinkException.class)
+                .extracting(e -> ((SinkException) e).errorCode())
+                .isEqualTo(io.osproxy.core.ErrorCode.UPSTREAM_FAILED);
+    }
+
+    @Test
     void streamingSearchAndCountHitTheExpectedUpstreamPaths() throws Exception {
         SEEN.clear();
         sink.searchStreaming(target, new java.io.ByteArrayInputStream(

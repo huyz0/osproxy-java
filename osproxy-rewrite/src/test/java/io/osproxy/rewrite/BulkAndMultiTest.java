@@ -58,9 +58,9 @@ class BulkAndMultiTest {
                 {"doc":{"msg":"b2"}}
                 {"delete":{"_id":"1"}}
                 """;
-        var reader = new java.io.BufferedReader(new java.io.StringReader(ndjson));
+        var parser = Json.MAPPER.getFactory().createParser(ndjson.getBytes());
         var streamed = new java.util.ArrayList<Bulk.Item>();
-        Bulk.parseBulkStream(reader).forEachRemaining(streamed::add);
+        Bulk.parseBulkStream(parser).forEachRemaining(streamed::add);
 
         List<Bulk.Item> buffered = Bulk.parseBulk(ndjson.getBytes());
         assertThat(streamed).hasSize(buffered.size());
@@ -73,15 +73,15 @@ class BulkAndMultiTest {
     }
 
     @Test
-    void parseBulkStreamReportsAnEmptyBodyAsHasNextFalse() {
-        var reader = new java.io.BufferedReader(new java.io.StringReader(""));
-        assertThat(Bulk.parseBulkStream(reader).hasNext()).isFalse();
+    void parseBulkStreamReportsAnEmptyBodyAsHasNextFalse() throws Exception {
+        var parser = Json.MAPPER.getFactory().createParser("".getBytes());
+        assertThat(Bulk.parseBulkStream(parser).hasNext()).isFalse();
     }
 
     @Test
-    void parseBulkStreamWrapsAMalformedLineAsARewriteExceptionCause() {
-        var reader = new java.io.BufferedReader(new java.io.StringReader("not json\n{}\n"));
-        var items = Bulk.parseBulkStream(reader);
+    void parseBulkStreamWrapsAMalformedLineAsARewriteExceptionCause() throws Exception {
+        var parser = Json.MAPPER.getFactory().createParser("not json\n{}\n".getBytes());
+        var items = Bulk.parseBulkStream(parser);
         assertThatThrownBy(items::hasNext)
                 .isInstanceOf(RuntimeException.class)
                 .extracting(Throwable::getCause)

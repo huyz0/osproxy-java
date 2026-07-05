@@ -121,9 +121,13 @@ public final class Pipeline {
      */
     public BulkStream openBulkStream(RequestCtx ctx, java.io.InputStream in)
             throws RewriteException {
-        var reader = new java.io.BufferedReader(
-                new java.io.InputStreamReader(in, java.nio.charset.StandardCharsets.UTF_8));
-        var items = MultiOps.peekBulkStream(reader);
+        com.fasterxml.jackson.core.JsonParser parser;
+        try {
+            parser = Json.MAPPER.getFactory().createParser(in);
+        } catch (java.io.IOException e) {
+            throw new RewriteException(RewriteException.Kind.INVALID_JSON, "invalid bulk body");
+        }
+        var items = MultiOps.peekBulkStream(parser);
         return new BulkStream(ctx, items);
     }
 
@@ -203,13 +207,10 @@ public final class Pipeline {
      * inside its upload's output-stream callback — reading {@code
      * requestBody} and writing the transformed document straight to the
      * upstream connection, on the same (virtual) thread that's handling
-     * this request. No pipe, no second thread: an earlier version used a
-     * {@code PipedOutputStream} plus a dedicated producer thread, measured
-     * 2-12x slower than the buffered path (see docs/11-performance.md) —
-     * pure thread-hop overhead, since Helidon already hands the destination
-     * stream to the calling thread synchronously. The response is the
-     * small, already-buffered ack every ingest returns; only the
-     * (potentially large) request body streams.
+     * this request — no pipe, no second thread, since Helidon already hands
+     * the destination stream to the calling thread synchronously. The
+     * response is the small, already-buffered ack every ingest returns;
+     * only the (potentially large) request body streams.
      */
     public PipelineResponse ingestDocStreaming(RequestCtx ctx, java.io.InputStream requestBody)
             throws SpiException, RewriteException, SinkException {
@@ -226,11 +227,13 @@ public final class Pipeline {
         boolean create = ctx.path().contains("/_create/");
 
         io.osproxy.sink.StreamTransform transform = (in, out) -> {
-            try {
-                var parser = Json.MAPPER.getFactory().createParser(in);
-                var generator = Json.MAPPER.getFactory().createGenerator(out);
+            // try-with-resources so a mid-parse failure (malformed JSON,
+            // over-cap read) still closes the parser/generator instead of
+            // leaking them — closing also releases the streams they wrap
+            // (Jackson's default auto-close-source/target).
+            try (var parser = Json.MAPPER.getFactory().createParser(in);
+                    var generator = Json.MAPPER.getFactory().createGenerator(out)) {
                 Fields.injectFieldsStreaming(parser, generator, inject);
-                generator.close();
             } catch (java.io.IOException e) {
                 // Distinguishes "the body was bad" from "the connection was
                 // bad" once this has propagated through Helidon's own
@@ -616,11 +619,11 @@ public final class Pipeline {
         io.osproxy.sink.StreamTransform transform = filter.isEmpty()
                 ? io.osproxy.sink.StreamTransform.verbatim()
                 : (in, out) -> {
-                    try {
-                        var parser = Json.MAPPER.getFactory().createParser(in);
-                        var generator = Json.MAPPER.getFactory().createGenerator(out);
+                    // try-with-resources: see ingestDocStreaming's transform
+                    // for why the parser/generator must close even on failure.
+                    try (var parser = Json.MAPPER.getFactory().createParser(in);
+                            var generator = Json.MAPPER.getFactory().createGenerator(out)) {
                         Queries.wrapQueryStreaming(parser, generator, filter);
-                        generator.close();
                     } catch (RewriteException | java.io.IOException e) {
                         throw new io.osproxy.sink.TransformFailedException(e);
                     }

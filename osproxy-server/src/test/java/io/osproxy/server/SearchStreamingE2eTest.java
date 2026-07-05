@@ -121,6 +121,60 @@ class SearchStreamingE2eTest {
     }
 
     @Test
+    void aSearchBodyExactlyAtTheCapPassesButOneByteOverFailsWith413() throws Exception {
+        // Boundary check on CappingInputStream.check's `seen > cap` test. The
+        // extra byte over cap sits inside the "msg" string's token so the
+        // streaming parser is forced to actually read it (a trailing byte
+        // outside any token might never be pulled off the wire at all).
+        var cluster = new ClusterId("primary");
+        var reference = new ReferenceTenancy(cluster, new IndexName("shared"));
+        WebServer upstream = WebServer.builder()
+                .routing((io.helidon.webserver.http.HttpRouting.Builder r) -> r.any((req, res) -> {
+                    if (req.content().hasEntity()) {
+                        req.content().as(byte[].class);
+                    }
+                    res.status(200).send("{\"hits\":{\"hits\":[]}}");
+                }))
+                .port(0)
+                .build()
+                .start();
+        try {
+            var sink = new OpenSearchSink(Map.of(cluster, "http://localhost:" + upstream.port()));
+            Pipeline pipeline = new Pipeline(new TenancyRouter(reference), sink, sink);
+            String atCapQuery = "{\"query\":{\"match\":{\"msg\":\"x\"}}}";
+            long cap = atCapQuery.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+            String overCapQuery = "{\"query\":{\"match\":{\"msg\":\"xx\"}}}";
+            WebServer proxy = WebServer.builder()
+                    .port(0)
+                    .routing(new AppHandler(pipeline, new BearerAuth(Map.of()), cap, false)::route)
+                    .build()
+                    .start();
+            try {
+                var client = HttpClient.newHttpClient();
+                var atCapReq = HttpRequest.newBuilder(
+                                URI.create("http://localhost:" + proxy.port() + "/shared/_search"))
+                        .POST(HttpRequest.BodyPublishers.ofString(atCapQuery))
+                        .header("x-tenant", "acme")
+                        .build();
+                assertThat(client.send(atCapReq, HttpResponse.BodyHandlers.ofString()).statusCode())
+                        .isEqualTo(200);
+
+                var overCapReq = HttpRequest.newBuilder(
+                                URI.create("http://localhost:" + proxy.port() + "/shared/_search"))
+                        .POST(HttpRequest.BodyPublishers.ofString(overCapQuery))
+                        .header("x-tenant", "acme")
+                        .build();
+                assertThat(client.send(overCapReq, HttpResponse.BodyHandlers.ofString()).statusCode())
+                        .isEqualTo(413);
+            } finally {
+                proxy.stop();
+            }
+        } finally {
+            upstream.stop();
+        }
+    }
+
+    @Test
     void unfilterableSearchConstructsAreStillRefusedOnTheStreamingPath() throws Exception {
         var cluster = new ClusterId("primary");
         var reference = new ReferenceTenancy(cluster, new IndexName("shared"));

@@ -115,6 +115,24 @@ class PipelineSearchStreamingTest {
                         "{\"query\":{\"match_all\":{}}}".getBytes(StandardCharsets.UTF_8)), true));
     }
 
+    @Test
+    void aGenuineConnectionFailureIsNotMisclassifiedAsAMalformedBody() {
+        // streamingFailureResponse only reclassifies a SinkException whose
+        // cause chain contains TransformFailedException or RewriteException
+        // (body-shaped problems); a SinkException wrapping an unrelated
+        // network failure must propagate untouched, not become a 400/413.
+        var ctx = request(HttpMethod.POST, "/orders/_search", "acme", new byte[0]);
+        var failingReader = new FailingReader(new SinkException(
+                io.osproxy.core.ErrorCode.UPSTREAM_FAILED, "connect failed",
+                new java.net.ConnectException("refused")));
+        var streamingPipeline = new Pipeline(
+                new TenancyRouter(PipelineTestSupport.sharedIndexSpi(true)), sink, failingReader);
+        SinkException thrown = org.junit.jupiter.api.Assertions.assertThrows(SinkException.class, () ->
+                streamingPipeline.searchStreaming(ctx, new ByteArrayInputStream(
+                        "{\"query\":{\"match_all\":{}}}".getBytes(StandardCharsets.UTF_8)), true));
+        assertThat(thrown.errorCode()).isEqualTo(io.osproxy.core.ErrorCode.UPSTREAM_FAILED);
+    }
+
     // ---- dedicated (unfiltered) placement: the verbatim streaming path ----
 
     private static TenancySpi dedicatedIndexSpi() {
