@@ -227,9 +227,17 @@ public final class AppHandler {
         // Single-doc ingest streams too, but only when the physical target
         // and id don't require reading the document first (see
         // Pipeline#supportsStreamingIngest) — that's a property of the
-        // tenancy configuration, checked once per request, not the body.
+        // tenancy configuration, checked once per request, not the body —
+        // and only when the request isn't async-mode: ingestDocStreaming
+        // writes straight to the upstream sink with no async handling of
+        // its own, so an async-mode request routed here would silently
+        // skip the durable-enqueue contract and dial the real upstream
+        // instead of the queue.
         if (classified.endpoint() == io.osproxy.core.EndpointKind.INGEST_DOC
-                && pipeline.supportsStreamingIngest()) {
+                && pipeline.supportsStreamingIngest()
+                && !io.osproxy.engine.AsyncWrites.wantsAsync(
+                        req.headers().first(HeaderNames.create(
+                                io.osproxy.engine.AsyncWrites.WRITE_MODE_HEADER)))) {
             streamIngest(req, res, classified, method.get(), principal.get());
             return;
         }

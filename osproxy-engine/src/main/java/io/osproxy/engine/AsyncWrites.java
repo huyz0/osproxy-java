@@ -36,9 +36,19 @@ public final class AsyncWrites {
 
     /** Whether the request asked for async mode. */
     static boolean wantsAsync(RequestCtx ctx) {
-        return ctx.header(WRITE_MODE_HEADER)
-                .map(v -> v.equalsIgnoreCase("async"))
-                .orElse(false);
+        return wantsAsync(ctx.header(WRITE_MODE_HEADER));
+    }
+
+    /**
+     * The header-value form, public so the ingress can make its own
+     * streaming-vs-buffered routing decision before a {@link RequestCtx}
+     * even exists — see {@code AppHandler}'s dispatch, which must not route
+     * an async-mode single-doc ingest into the streaming path (that path
+     * has no async handling of its own; it always writes straight to the
+     * upstream sink).
+     */
+    public static boolean wantsAsync(java.util.Optional<String> writeModeHeader) {
+        return writeModeHeader.map(v -> v.equalsIgnoreCase("async")).orElse(false);
     }
 
     /**
