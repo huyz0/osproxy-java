@@ -1,5 +1,6 @@
 package io.osproxy.engine;
 
+import static io.osproxy.engine.PipelineTestSupport.json;
 import static io.osproxy.engine.PipelineTestSupport.request;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -76,10 +77,14 @@ class PipelineMigrationTest {
         assertThat(pipeline.handle(request(
                         HttpMethod.DELETE, "/orders/_doc/1", "acme"))
                 .status()).isEqualTo(409);
-        assertThat(pipeline.handle(request(
-                        HttpMethod.POST, "/_bulk", "acme",
-                        "{\"index\":{\"_index\":\"orders\",\"_id\":\"4\"}}\n{}\n".getBytes()))
-                .status()).isEqualTo(409);
+        // Bulk reports the stale epoch per item, not as a whole-batch
+        // failure — the response is still 200, with the item's own status
+        // carrying the 409.
+        var bulkResp = pipeline.handle(request(
+                HttpMethod.POST, "/_bulk", "acme",
+                "{\"index\":{\"_index\":\"orders\",\"_id\":\"4\"}}\n{}\n".getBytes()));
+        assertThat(bulkResp.status()).isEqualTo(200);
+        assertThat(json(bulkResp).at("/items/0/index/status").asInt()).isEqualTo(409);
 
         // ...while reads keep answering (INV-M4). The new placement is what
         // resolution sees, so the read goes to the (empty) new index — gated

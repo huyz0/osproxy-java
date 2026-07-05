@@ -143,8 +143,7 @@ public final class Pipeline {
 
         /** Dispatches every item, writing each result as it completes. */
         public void writeTo(java.io.OutputStream out)
-                throws java.io.IOException, SpiException, RewriteException, SinkException,
-                        EngineException {
+                throws java.io.IOException, SpiException, RewriteException, SinkException {
             var gen = Json.MAPPER.getFactory().createGenerator(out);
             multiOps.bulkStreaming(ctx, items, gen);
         }
@@ -339,8 +338,6 @@ public final class Pipeline {
         } catch (RewriteException e) {
             return PipelineResponse.error(ErrorCode.MALFORMED_REQUEST);
         } catch (SinkException e) {
-            return PipelineResponse.error(e.errorCode());
-        } catch (EngineException e) {
             return PipelineResponse.error(e.errorCode());
         }
     }

@@ -40,17 +40,22 @@ final class MultiOps {
     }
 
     PipelineResponse bulk(RequestCtx ctx)
-            throws SpiException, RewriteException, SinkException, EngineException {
+            throws SpiException, RewriteException, SinkException {
         List<Bulk.Item> items = Bulk.parseBulk(ctx.body());
         if (items.isEmpty()) {
             return PipelineResponse.error(ErrorCode.MALFORMED_REQUEST);
         }
+        // A per-item failure (stale epoch today) must not abort the whole
+        // batch — real OpenSearch, and this endpoint's own streaming twin,
+        // both report bulk failures per item. prepare() never throws for
+        // that condition; it returns an already-failed ItemCtx instead, so
+        // only the items that actually need dispatching go into ops.
         List<WriteBatch.Op> ops = new ArrayList<>(items.size());
         List<ItemCtx> contexts = new ArrayList<>(items.size());
         for (Bulk.Item item : items) {
             ItemCtx ic = prepare(ctx, item);
             contexts.add(ic);
-            ops.add(ic.op());
+            ic.op().ifPresent(ops::add);
         }
         WriteBatch.Ack ack = pipeline.sink().write(ops);
 
@@ -58,9 +63,11 @@ final class MultiOps {
         out.put("took", 0);
         boolean errors = false;
         ArrayNode itemsOut = out.putArray("items");
-        for (int i = 0; i < ack.results().size(); i++) {
-            WriteBatch.OpResult result = ack.results().get(i);
-            ItemCtx ic = contexts.get(i);
+        int dispatched = 0;
+        for (ItemCtx ic : contexts) {
+            WriteBatch.OpResult result = ic.op().isPresent()
+                    ? ack.results().get(dispatched++)
+                    : ic.preparedFailure().orElseThrow();
             errors |= !result.ok();
             ObjectNode verb = itemsOut.addObject().putObject(ic.verbKey());
             verb.put("_index", ic.logicalIndex());
@@ -110,8 +117,7 @@ final class MultiOps {
     void bulkStreaming(
             RequestCtx ctx, java.util.Iterator<Bulk.Item> items,
             com.fasterxml.jackson.core.JsonGenerator gen)
-            throws java.io.IOException, SpiException, RewriteException, SinkException,
-                    EngineException {
+            throws java.io.IOException, SpiException, RewriteException, SinkException {
         gen.writeStartObject();
         gen.writeNumberField("took", 0);
         gen.writeArrayFieldStart("items");
@@ -120,8 +126,9 @@ final class MultiOps {
             while (items.hasNext()) {
                 Bulk.Item item = items.next();
                 ItemCtx ic = prepare(ctx, item);
-                WriteBatch.Ack ack = pipeline.sink().write(List.of(ic.op()));
-                WriteBatch.OpResult result = ack.results().get(0);
+                WriteBatch.OpResult result = ic.op().isPresent()
+                        ? pipeline.sink().write(List.of(ic.op().get())).results().get(0)
+                        : ic.preparedFailure().orElseThrow();
                 errors |= !result.ok();
                 gen.writeStartObject();
                 gen.writeObjectFieldStart(ic.verbKey());
@@ -144,11 +151,19 @@ final class MultiOps {
         gen.flush();
     }
 
-    /** Per-item routing/transform state carried through to response assembly. */
-    private record ItemCtx(WriteBatch.Op op, String verbKey, String logicalIndex, String logicalId) {}
+    /**
+     * Per-item routing/transform state carried through to response assembly.
+     * {@code op} is empty exactly when {@code preparedFailure} is present —
+     * a per-item condition (stale epoch today) that must be reported as
+     * this item's own result, not thrown, so it can't abort the rest of
+     * the batch or (on the streaming path) the items already written.
+     */
+    private record ItemCtx(
+            Optional<WriteBatch.Op> op, String verbKey, String logicalIndex, String logicalId,
+            Optional<WriteBatch.OpResult> preparedFailure) {}
 
     private ItemCtx prepare(RequestCtx ctx, Bulk.Item item)
-            throws SpiException, RewriteException, EngineException {
+            throws SpiException, RewriteException {
         String logicalIndex = item.index()
                 .or(ctx::logicalIndex)
                 .orElseThrow(() -> new SpiException.UnsupportedEndpoint(ctx.endpoint()));
@@ -156,12 +171,15 @@ final class MultiOps {
         RequestCtx itemCtx = withIndex(ctx, logicalIndex, item.id());
         ObjectNode doc = item.doc().orElse(null);
         RouteDecision decision = pipeline.router().route(itemCtx, doc);
+        String logicalId = item.id().orElseGet(() -> UUID.randomUUID().toString());
         if (!pipeline.router().spi().admitWrite(decision.partition(), decision.epoch())) {
-            throw new EngineException(ErrorCode.STALE_EPOCH, "stale epoch for bulk item");
+            return new ItemCtx(
+                    Optional.empty(), item.action().key(), logicalIndex, logicalId,
+                    Optional.of(new WriteBatch.OpResult(
+                            ErrorCode.STALE_EPOCH.httpStatus(), "error", logicalId)));
         }
 
         Optional<DocIdRule> rule = Transforms.idRule(decision.transform());
-        String logicalId = item.id().orElseGet(() -> UUID.randomUUID().toString());
         Optional<String> routing = pipeline.routing(rule, decision);
 
         DocOp docOp;
@@ -188,8 +206,8 @@ final class MultiOps {
             default -> throw new IllegalStateException("unreachable");
         }
         return new ItemCtx(
-                new WriteBatch.Op(decision.target(), docOp, decision.epoch()),
-                item.action().key(), logicalIndex, logicalId);
+                Optional.of(new WriteBatch.Op(decision.target(), docOp, decision.epoch())),
+                item.action().key(), logicalIndex, logicalId, Optional.empty());
     }
 
     PipelineResponse mget(RequestCtx ctx)

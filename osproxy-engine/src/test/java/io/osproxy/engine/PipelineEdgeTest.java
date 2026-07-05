@@ -4,6 +4,7 @@ import static io.osproxy.engine.PipelineTestSupport.json;
 import static io.osproxy.engine.PipelineTestSupport.request;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import io.osproxy.core.ClusterId;
 import io.osproxy.core.Epoch;
 import io.osproxy.core.IndexName;
@@ -91,15 +92,23 @@ class PipelineEdgeTest {
     }
 
     @Test
-    void bulkUnderAWriteFreezeIs409() {
+    void bulkUnderAWriteFreezeReportsStaleEpochPerItemNotAsAWholeBatchFailure() {
+        // A per-item condition (stale epoch) must not abort the whole batch
+        // — real OpenSearch, and this endpoint's own streaming twin, both
+        // report bulk failures per item. The response itself is still 200,
+        // with the failing item's own status/result carrying the 409.
         var sink = new MemorySink();
         var pipeline = new Pipeline(
                 new TenancyRouter(PipelineTestSupport.sharedIndexSpi(false)), sink, sink);
         var resp = pipeline.handle(request(
                 HttpMethod.POST, "/_bulk", "acme",
                 "{\"index\":{\"_index\":\"orders\",\"_id\":\"1\"}}\n{}\n".getBytes()));
-        assertThat(resp.status()).isEqualTo(409);
-        assertThat(new String(resp.body())).contains("stale_epoch");
+        assertThat(resp.status()).isEqualTo(200);
+        JsonNode body = json(resp);
+        assertThat(body.get("errors").asBoolean()).isTrue();
+        JsonNode item = body.at("/items/0/index");
+        assertThat(item.get("status").asInt()).isEqualTo(409);
+        assertThat(item.get("result").asText()).isEqualTo("error");
     }
 
     @Test
