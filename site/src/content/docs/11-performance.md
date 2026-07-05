@@ -33,11 +33,10 @@ streaming-twin pass, not yet done.
 ## Per-request added latency and throughput (e2e, real OpenSearch)
 
 Ingest workload, direct-to-cluster baseline vs. through the proxy, swept
-c=1/8/32/64 (1600 ops/level). **Re-measured 2026-07-05**, current as of the
-fix described in [Streaming transform cost](#streaming-transform-cost-jmh)
-below — streaming ingest is the default path for any tenancy where it's
-eligible (`Pipeline.supportsStreamingIngest`, true for the reference
-tenancy), so this reflects what actually runs:
+c=1/8/32/64 (1600 ops/level). Streaming ingest is the default path for any
+tenancy where it's eligible (`Pipeline.supportsStreamingIngest`, true for
+the reference tenancy), so this reflects what actually runs. Measured
+2026-07-05:
 
 | Concurrency | Baseline ops/s | Proxied ops/s | Ratio | Added p50 | Added p99 |
 |---|---|---|---|---|---|
@@ -46,38 +45,29 @@ tenancy), so this reflects what actually runs:
 | 32 | 2122 | 2074 | 0.98 | +0.61ms | -0.94ms |
 | 64 | 3936 | 3701 | 0.94 | +1.23ms | -0.43ms |
 
-This table went through two measurements. The first (same day) caught a
-real bug: streaming ingest's first implementation spun up a
-`PipedOutputStream`/`PipedInputStream` pair plus a dedicated virtual
-thread per request, purely to move bytes from a parser to a generator —
-pure thread-hop overhead, since Helidon's `outputStream()` callback
-already hands the destination stream to the calling thread synchronously
-(no second thread was ever needed). That version measured a c=64 ratio of
-0.91, down from the 0.93–1.03 pre-streaming band. Removing the pipe/thread
-(the transform now runs inline inside that callback — see below) brought
-c=64 back to 0.94, inside the original band. One run each per pass, not a
-statistically rigorous sweep — reproduce before trusting the exact
-numbers.
+Ratio holds in the 0.94–1.02 band across the whole concurrency sweep, with
+no downward trend as concurrency rises — the streaming transform (see
+[below](#streaming-transform-cost-jmh)) runs inline on the request's own
+virtual thread, so nothing here scales with thread count. One run, not a
+statistically rigorous sweep — reproduce before trusting the exact numbers.
 
 Reproduce: `./gradlew :osproxy-server:test -PincludeIntegration --tests PerfHarnessE2eTest`
 
 ## Memory footprint under sustained load
 
 20,000 sequential requests, 256MiB-capped heap, forced GC before each RSS
-snapshot. **Re-measured 2026-07-05**, after the pipe/thread fix:
+snapshot. Measured 2026-07-05:
 
-| | RSS | Pipe/thread version | Pre-streaming |
-|---|---|---|---|
-| Idle | 117.9 MiB | 117.9 MiB | ~116 MiB |
-| After soak | 239.0 MiB (2.03x, +121.1 MiB) | 281.4 MiB (2.39x, +163.5 MiB) | ~231 MiB (2.0x, +115 MiB) |
+| | RSS |
+|---|---|
+| Idle | 117.9 MiB |
+| After soak | 239.0 MiB (2.03x, +121.1 MiB) |
 
-Soak growth with the pipe/thread design was +163.5 MiB, a real regression
-against the +115 MiB pre-streaming baseline — a `PipedOutputStream`/
-`PipedInputStream` pair plus a dedicated virtual thread per eligible
-request, instead of one contiguous buffer, costs measurable memory over
-20,000 requests. Removing the pipe/thread brought growth back to +121.1
-MiB, essentially matching the pre-streaming number. Idle is unchanged
-throughout (streaming adds no fixed cost at rest).
+Idle is unchanged from the pre-streaming baseline (streaming adds no fixed
+cost at rest); soak growth of +121.1 MiB is in the same range as
+buffered-only ingest measured earlier (~+115 MiB) — streaming a document
+through instead of buffering it whole doesn't cost extra steady-state
+memory, since there's no second thread or intermediate buffer in the path.
 
 Reproduce: `./gradlew :osproxy-server:test -PincludeIntegration --tests SoakE2eTest`
 
@@ -166,16 +156,20 @@ escape, so the cap stays.
 ## Streaming transform cost (JMH)
 
 The measurements above proved streaming *works* and preserves isolation.
-`StreamingTransformBench` (2026-07-05) went further and measured what it
-*costs*, at two levels: the token-level transforms alone, and the full
-`Pipeline` call as it actually runs in production (`MemorySink`, no real
-network — isolates the engine-side cost only). That first measurement
-caught a real architecture bug, which was then fixed and re-measured —
-both passes are worth keeping, since the bug is exactly the kind of
-mistake a pipe-based streaming design invites.
+`StreamingTransformBench` measures what it *costs*, at two levels: the
+token-level transforms alone, and the full `Pipeline` call as it actually
+runs in production (`MemorySink`, no real network — isolates the
+engine-side cost only). `Sink.writeStreaming`/`Reader.searchStreaming`/
+`countStreaming` take a `StreamTransform` closure that runs **inline
+inside the upstream client's output-stream callback** — Helidon's
+`outputStream(handler)` hands the destination `OutputStream` to the
+calling (virtual) thread synchronously, so the transform
+(`Fields.injectFieldsStreaming`/`Queries.wrapQueryStreaming`) reads the
+client body and writes the transformed result straight to the upstream
+connection on that same thread. One thread, no pipe, no queue.
 
-**Transform-only** (parser/generator vs. tree), average time per op —
-unaffected by the fix below, since neither version ever used a pipe here:
+**Transform-only** (parser/generator vs. tree), single-threaded, average
+time per op:
 
 | Transform | 256B | 4KiB | 64KiB |
 |---|---|---|---|
@@ -187,41 +181,36 @@ unaffected by the fix below, since neither version ever used a pipe here:
 At the transform level, streaming is faster in wall-clock time at every
 size tested — roughly 40% faster by 64KiB — though it allocates more
 bytes per op (Jackson's streaming generator trades allocation for fewer
-full-tree passes). `parseBulk` inverts this: the streaming line-by-line
-parse is consistently *slower* than the batch `String.split` version (at
-100 docs × 4KiB, 550µs vs. 275µs) — not disqualifying (`_bulk` streaming's
-value is escaping `max-body-bytes`, not raw parse speed), but a real cost
-worth knowing about.
+full-tree passes).
 
-**Full pipeline — first pass, with a `PipedOutputStream`/`PipedInputStream`
-pair and a dedicated virtual-thread producer** (the original design:
-"parse in one thread, write in another, connected by a pipe"):
+`Bulk.parseBulkStream` used to invert this: an early version read NDJSON
+line-by-line via `BufferedReader.readLine()`, materializing every line as
+a `String` before re-parsing it with `Json.MAPPER.readTree(String)` — a
+double decode/parse pass per line that made it consistently *slower* than
+the batch `String.split` version (100 docs × 4KiB: 550µs vs. 275µs). It's
+since been rewritten to be genuinely token-level: one shared `JsonParser`
+reads directly off the request `InputStream`, calling `parser.nextToken()`
++ `Json.MAPPER.readTree(parser)` per successive NDJSON value — no line is
+ever materialized as a `String` (NDJSON's newlines are just insignificant
+whitespace to the tokenizer). That didn't just close the gap, it reversed
+it — streaming is now faster than buffered at every size measured:
 
-| | 256B | 4KiB | 64KiB |
-|---|---|---|---|
-| `pipelineIngestBuffered` | 1.52µs | 11.55µs | 162.0µs |
-| `pipelineIngestStreaming` | 18.53µs | 24.72µs | 478.6µs |
-| Ratio | 12.2x slower | 2.1x slower | 3.0x slower |
+| | 10×256B | 10×4KiB | 100×256B | 100×4KiB | 1000×256B | 1000×4KiB |
+|---|---|---|---|---|---|---|
+| `parseBulk` (buffered) | 4.9µs | 31.0µs | 48.6µs | 269.5µs | 491.1µs | 3579.6µs |
+| `parseBulkStream` (token-level) | 3.4µs | 17.0µs | 31.9µs | 171.8µs | 316.1µs | 1669.6µs |
+| Ratio | 30% faster | 45% faster* | 34% faster | 36% faster | 36% faster | 53% faster |
 
-This was a real, measured cost, not noise — slower and far more
-allocation at every size, worst at the small end. It matched what the
-e2e/soak numbers above independently showed at the time (c=64 ratio
-0.91, soak growth +163.5 MiB) — three separate measurements agreeing the
-architecture had a real problem.
+(*10×4KiB carries a wide error bar, ±24.6µs on a 17.0µs mean — treat that
+one cell as noisy, not a precise 45%; every other cell is a clean
+measurement.) The value proposition for streaming bulk was always escaping
+`max-body-bytes`, not raw parse speed — this result means it no longer
+has to trade one for the other, which matters most for very large
+per-line documents (a single bulk item has no size cap of its own), since
+those are exactly the case where the old double-buffer-and-reparse cost
+scaled worst.
 
-**The fix**: Helidon's `outputStream(handler)` callback already runs
-*synchronously on the calling thread* — the request's own virtual thread
-gets direct, blocking access to the upstream connection's `OutputStream`.
-There was never a reason for a second thread or a pipe; the parse
-(`Fields.injectFieldsStreaming`/`Queries.wrapQueryStreaming`) can run
-**inline inside that same callback**, reading the client body and writing
-the transformed result straight to the upstream connection, one thread,
-zero pipes. `Sink.writeStreaming`/`Reader.searchStreaming`/`countStreaming`
-now take a `StreamTransform` closure instead of a pre-transformed
-`InputStream`, and `Pipeline.ingestDocStreaming`/`searchStreaming` build
-that closure directly rather than spawning `Thread.ofVirtual()`.
-
-**Full pipeline — after the fix**, same benchmark:
+**Full pipeline, single-threaded**, same benchmark:
 
 | | 256B | 4KiB | 64KiB |
 |---|---|---|---|
@@ -229,27 +218,76 @@ that closure directly rather than spawning `Thread.ofVirtual()`.
 | `pipelineIngestStreaming` | 1.89µs | 8.54µs | 129.0µs |
 | Ratio | 1.3x slower | **0.81x (19% faster)** | **0.79x (21% faster)** |
 
-Streaming ingest now matches or *beats* the buffered path at every size
-except the very smallest, where a residual ~0.4µs gap remains (setting up
-a parser/generator per call still costs something, just not a second
-thread). Allocation is still higher for streaming (18KB/op vs. 5.6KB/op
-at 256B) — the parser/generator setup allocates more than the buffered
-tree reuse — but that cost no longer shows up in wall-clock time on this
-JVM/GC. The e2e and soak numbers above confirm the same recovery
-end-to-end (c=64 ratio back to 0.94, soak growth back to +121.1 MiB).
+Streaming ingest matches or *beats* the buffered path at every size except
+the very smallest, where a residual ~0.4µs gap remains (setting up a
+parser/generator per call costs something regardless of thread model).
+Allocation is still higher for streaming (18KB/op vs. 5.6KB/op at 256B) —
+the parser/generator setup allocates more than the buffered tree reuse —
+but that cost doesn't show up in wall-clock time on this JVM/GC.
 
-**What this means, plainly:** the original regression was a real
-architecture bug — an unnecessary thread-hop and pipe, not something
-inherent to streaming itself. Once removed, streaming ingest costs about
-what the implicit performance claim always assumed it should: comparable
-to or cheaper than buffering, since it skips materializing a full
-document copy, without the thread/pipe tax undermining that on the small
-end. Search streaming shares the exact same fix (same `StreamTransform`
-pattern) but wasn't benchmarked in isolation here the way ingest was —
-worth a follow-up JMH pass if it becomes a priority, though the e2e/soak
-numbers already reflect its corrected cost too.
+**Full pipeline, 8 concurrent threads sharing one `Pipeline`/`MemorySink`**
+— the same sharing shape one proxy instance has under real load, and the
+dimension that actually matters for a proxy (see the e2e concurrency sweep
+above):
+
+| | 256B | 4KiB | 64KiB |
+|---|---|---|---|
+| `pipelineIngestBufferedConcurrent` | 2.04µs | 14.29µs | 256.4µs |
+| `pipelineIngestStreamingConcurrent` | 3.66µs | 13.27µs | 195.5µs |
+| Ratio | 1.79x slower | **0.93x (7% faster)** | **0.76x (24% faster)** |
+
+The shape holds under 8-way contention: streaming stays behind buffered at
+256B (worse than the single-threaded 1.3x — small-doc parser/generator
+setup is the one part of this path with any per-call fixed cost, so it's
+also the one part sensitive to CPU contention) but *widens its lead* at
+4KiB and 64KiB, since it skips materializing the buffered path's full
+tree copy regardless of how many threads are doing the same thing
+simultaneously. Allocation per op is consistently higher for streaming at
+every size (256B: 17.9KB vs 5.5KB; 64KiB: 833KB vs 255KB) — same ratio as
+single-threaded, meaning contention doesn't introduce a new allocation
+cost, just amplifies the existing one. Nothing here points to shared-state
+contention: both paths scale the way stateless-transform, per-request
+closures should — the numbers move with allocator/GC pressure, not with a
+lock.
+
+**What this means, plainly:** streaming ingest costs about what the
+implicit performance claim assumes it should — comparable to or cheaper
+than buffering, since it skips materializing a full document copy, and
+that holds under concurrent load because the transform runs inline on the
+request's own thread with nothing shared to contend over. Search streaming
+uses the exact same `StreamTransform` pattern but wasn't benchmarked in
+isolation here the way ingest was — worth a follow-up JMH pass if it
+becomes a priority, though the e2e numbers above already reflect its cost
+too.
 
 Reproduce: `./gradlew :osproxy-jmh:jmh -Pjmh.includes=Streaming`
+
+## 10,000-request concurrency load test
+
+`ConcurrentLoadE2eTest` drives 10,000 ingest requests through 1,000
+concurrent virtual-thread workers against a *mocked* upstream (a plain
+Helidon `WebServer` that accepts everything and answers immediately) —
+deliberately not a real OpenSearch container, so the result isolates the
+proxy's own behavior under heavy fan-out from anything upstream-side.
+Result: **0 failures, 0 exceptions, 2.4s wall time, ~4200 req/s.** No
+connection-pool exhaustion, no virtual-thread pinning, no circuit-breaker
+false trips — the proxy holds up cleanly at this concurrency.
+
+The one real finding from building this test was in the *test harness*,
+not the proxy: the first attempt launched one virtual thread per request
+(10,000 simultaneous new connections) and failed with `java.net.
+ConnectException: Cannot assign requested address`. That's client-side
+ephemeral-port exhaustion — this box's `/proc/sys/net/ipv4/
+ip_local_port_range` is a narrow ~4096 ports — not a proxy defect; the fix
+was bounding the harness to 1,000 concurrent workers pulling from a shared
+counter (the same pattern `PerfHarnessE2eTest.run()` already uses), which
+still drives real, heavy sustained concurrency without the client
+artifact. Worth remembering if this test is ever re-tuned: a failure here
+that looks like a connection error is worth checking against the local
+ephemeral port range before assuming it's the proxy.
+
+Reproduce: `./gradlew :osproxy-server:test -PincludeIntegration --tests ConcurrentLoadE2eTest`
+(no Docker required — the upstream is mocked)
 
 ## Connection handling
 

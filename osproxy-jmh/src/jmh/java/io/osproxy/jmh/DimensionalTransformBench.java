@@ -112,4 +112,12 @@ public class DimensionalTransformBench {
     public byte[] contendedWrapQuery(DocState state) throws RewriteException {
         return Queries.wrapQuery(state.searchBody, FILTER);
     }
+
+    @Benchmark
+    @Threads(8)
+    public byte[] contendedInjectAndSerialize(DocState state) throws RewriteException {
+        var parsed = Json.parseObject(state.doc);
+        Fields.injectFields(parsed, FILTER);
+        return Json.writeBytes(parsed);
+    }
 }
