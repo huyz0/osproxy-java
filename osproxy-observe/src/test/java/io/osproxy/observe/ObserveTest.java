@@ -40,6 +40,17 @@ class ObserveTest {
     }
 
     @Test
+    void explainDocEscapesStringFieldsRatherThanConcatenatingThemRaw() {
+        // requestId is proxy-assigned today, never a raw client value — but
+        // toJson() escapes it anyway, so a future field sourced from
+        // client-influenced data can't corrupt or inject into this JSON.
+        var withQuote = new ExplainDoc(
+                "req-\"1\"", "4bf92f3577b34da6a3ce929d0e0e4736", EndpointKind.SEARCH,
+                "POST", 200, Optional.empty(), 1_000);
+        assertThat(withQuote.toJson()).contains("\"request_id\":\"req-\\\"1\\\"\"");
+    }
+
+    @Test
     void explainStoreIsABoundedRingWithLookup() {
         var store = new ExplainStore(2);
         store.record(doc("a", 200));

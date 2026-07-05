@@ -37,6 +37,24 @@ class CaptureTest {
     }
 
     @Test
+    void safeCaptureSwallowsARuntimeExceptionFromTheDelegate() {
+        Capture broken = record -> {
+            throw new IllegalStateException("backend unavailable");
+        };
+        // The whole point: this must not throw, so a broken capture backend
+        // can never be the reason a client-facing request fails.
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(
+                () -> Capture.safe(broken).capture(record()));
+    }
+
+    @Test
+    void safeCaptureStillDelegatesOnSuccess() {
+        var inner = new MemoryCapture();
+        Capture.safe(inner).capture(record());
+        assertThat(inner.records()).hasSize(1);
+    }
+
+    @Test
     void memoryProducerAcksAndFailsOnDemand() throws Exception {
         var producer = new MemoryAckProducer();
         producer.produceAcked("writes", "k".getBytes(), "v".getBytes());

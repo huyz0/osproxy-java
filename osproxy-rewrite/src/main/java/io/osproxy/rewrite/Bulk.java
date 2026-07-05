@@ -37,7 +37,15 @@ public final class Bulk {
     }
 
     /**
-     * One parsed bulk operation.
+     * One parsed bulk operation. Despite the {@code record} framing, this is
+     * not value-immutable: {@code doc}/{@code actionMeta} are mutable
+     * Jackson {@code ObjectNode}s, and callers (e.g. {@code MultiOps}'s
+     * field injection) mutate them in place rather than copying — safe only
+     * because each {@code Item} is parsed fresh per request and never
+     * shared across requests or threads. {@code ObjectNode.equals} is
+     * itself structural, so this doesn't create an equals/hashCode
+     * correctness gap the way a mutable array field in a record would; it's
+     * a "don't assume this is immutable" note, not a bug.
      *
      * @param action the verb
      * @param index the per-action index override, when present

@@ -1,6 +1,7 @@
 package io.osproxy.observe;
 
 import io.osproxy.core.EndpointKind;
+import io.osproxy.core.JsonStrings;
 import java.util.Optional;
 
 /**
@@ -25,14 +26,19 @@ public record ExplainDoc(
         Optional<String> errorCode,
         long durationNanos) {
 
-    /** One stable JSON line (the log format and the explain wire format). */
+    /**
+     * One stable JSON line (the log format and the explain wire format).
+     * Every string field is escaped — today's fields are all proxy-derived
+     * (never a raw client value), but nothing here depends on that staying
+     * true forever.
+     */
     public String toJson() {
-        return "{\"request_id\":\"" + requestId
-                + "\",\"trace_id\":\"" + traceId
-                + "\",\"endpoint\":\"" + endpoint.wireName()
-                + "\",\"method\":\"" + method
+        return "{\"request_id\":\"" + JsonStrings.escape(requestId)
+                + "\",\"trace_id\":\"" + JsonStrings.escape(traceId)
+                + "\",\"endpoint\":\"" + JsonStrings.escape(endpoint.wireName())
+                + "\",\"method\":\"" + JsonStrings.escape(method)
                 + "\",\"status\":" + status
-                + errorCode.map(c -> ",\"error\":\"" + c + "\"").orElse("")
+                + errorCode.map(c -> ",\"error\":\"" + JsonStrings.escape(c) + "\"").orElse("")
                 + ",\"duration_nanos\":" + durationNanos + "}";
     }
 }

@@ -71,9 +71,15 @@ public final class AppHandler {
         this.observability = observability;
     }
 
-    /** Enables full-fidelity traffic capture (wrap with Capture.redacting). */
+    /**
+     * Enables full-fidelity traffic capture. Composed through {@code
+     * Capture.safe} here (not left to the caller) so a broken capture
+     * backend can never fail the request it's capturing; the header
+     * redaction still happens at the call site below, which is the actual
+     * choke point every capturing code path already goes through.
+     */
     public AppHandler withCapture(io.osproxy.capture.Capture capture) {
-        this.capture = Optional.of(capture);
+        this.capture = Optional.of(io.osproxy.capture.Capture.safe(capture));
         return this;
     }
 
@@ -286,7 +292,10 @@ public final class AppHandler {
         record(ctx, res, out, System.nanoTime() - started);
         // Credentials never reach a capture backend, whatever the sink is:
         // redaction happens here at the choke point, not by caller discipline.
-        capture.ifPresent(c -> io.osproxy.capture.Capture.redacting(c)
+        // safe(...) wraps redacting(c) itself (not just c) so a failure in
+        // the redaction step can't escape either — this.capture is already
+        // safe-wrapped, but that only guards the delegate, not this mapping.
+        capture.ifPresent(c -> io.osproxy.capture.Capture.safe(io.osproxy.capture.Capture.redacting(c))
                 .capture(new io.osproxy.capture.Capture.Record(
                         ctx.method().name(), path, headers, body,
                         out.status(), out.body())));

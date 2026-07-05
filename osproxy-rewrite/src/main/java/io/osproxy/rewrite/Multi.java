@@ -16,7 +16,12 @@ public final class Multi {
 
     private Multi() {}
 
-    /** One {@code _mget} doc reference. */
+    /**
+     * One {@code _mget} doc reference. Like {@link Bulk.Item}, {@code raw}
+     * is a mutable Jackson {@code ObjectNode} despite the {@code record}
+     * framing — safe only because each item is parsed fresh per request,
+     * never shared across requests or threads.
+     */
     public record MgetItem(Optional<String> index, String id, ObjectNode raw) {}
 
     /** Parses an {@code _mget} body: {@code {"docs":[{"_index":..,"_id":..},…]}}. */
@@ -43,7 +48,9 @@ public final class Multi {
 
     /**
      * One {@code _msearch} pair: the header line (index selection) and the
-     * search body line.
+     * search body line. {@code header}/{@code body} are mutable {@code
+     * ObjectNode}s (see {@link MgetItem}'s note) — same reasoning, same
+     * per-request-only safety.
      */
     public record MsearchItem(Optional<String> index, ObjectNode header, ObjectNode body) {}
 
