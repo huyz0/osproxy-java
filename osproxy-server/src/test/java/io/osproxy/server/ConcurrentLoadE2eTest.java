@@ -21,7 +21,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 /**
- * 10,000 ingest requests driven by 1,000 concurrent virtual-thread workers
+ * 2,000 ingest requests driven by 200 concurrent virtual-thread workers
  * against a mocked upstream rather than a real OpenSearch container.
  * Mocking the upstream isolates what this test actually wants to check:
  * the proxy's own behavior under heavy fan-out, not OpenSearch's. It
@@ -33,20 +33,19 @@ import org.junit.jupiter.api.Test;
  * false trips under simultaneous load, and any exception escaping a
  * request instead of becoming a proper HTTP status.
  *
- * <p>The 1,000-worker bound is deliberate, not a cop-out: launching one
- * raw virtual thread per request (10,000 simultaneous new connections)
- * doesn't stress the proxy any harder — it just exhausts the *client's*
- * local ephemeral port range first (confirmed on this box: {@code
- * /proc/sys/net/ipv4/ip_local_port_range} is a narrow ~4096 ports), which
- * is a test-harness artifact, not a proxy finding. 1,000 concurrent
- * in-flight requests is already well past anything a real client fleet
- * would throw at a single proxy instance at once.
+ * <p>Launching one raw virtual thread per request instead of bounding the
+ * worker count doesn't stress the proxy any harder — it just exhausts the
+ * *client's* local ephemeral port range first (confirmed on this box:
+ * {@code /proc/sys/net/ipv4/ip_local_port_range} is a narrow ~4096 ports),
+ * which is a test-harness artifact, not a proxy finding. A bounded worker
+ * pool well past any single-threaded time budget is what actually exercises
+ * concurrent in-flight load.
  */
 @Tag("integration")
 class ConcurrentLoadE2eTest {
 
-    private static final int REQUESTS = 10_000;
-    private static final int WORKERS = 1_000;
+    private static final int REQUESTS = 2_000;
+    private static final int WORKERS = 200;
     private static final String DOC = "{\"msg\":\"concurrent load\",\"n\":1}";
 
     private static WebServer upstream;

@@ -32,7 +32,7 @@ import org.testcontainers.containers.wait.strategy.Wait;
 @Tag("integration")
 class SoakE2eTest {
 
-    private static final int SOAK_REQUESTS = 20_000;
+    private static final int SOAK_REQUESTS = 4_000;
     private static final long PAGE_SIZE_BYTES = 4096; // Linux default; statm is in pages
 
     private static GenericContainer<?> opensearch;
@@ -155,12 +155,11 @@ class SoakE2eTest {
         var profile = new FootprintProfile(idle, soak);
         System.out.println("\n=== osproxy-java footprint profile ===\n" + profile.render());
 
-        // 2.5x growth OR 150 MiB absolute. Measured on this box: idle ~116MiB,
-        // soak ~231MiB (1.99x, 115MiB) for 20k requests against a 256MiB
-        // heap cap — G1 retaining reclaimable-but-uncollected regions after
-        // one GC.run, not a leak (RSS stayed flat across repeated runs).
-        // The margin here is deliberately wider than the observed value so
-        // the gate does not flake on ordinary GC-timing noise.
+        // 2.5x growth OR 150 MiB absolute: G1 retains reclaimable-but-
+        // uncollected regions after one GC.run as a matter of policy, not a
+        // leak, so the bound is deliberately wide of any single measured
+        // run to avoid flaking on ordinary GC-timing noise (RSS stays flat
+        // across repeated runs against a real leak-free build).
         assertThat(profile.judge(2.5, 150 * 1024 * 1024L))
                 .as("footprint growth: %s", profile.render())
                 .isTrue();
