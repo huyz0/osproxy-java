@@ -24,7 +24,7 @@ If you are new, read [Overview](/osproxy-java/01-overview/), then go straight to
 | 7 | [Configuration](/osproxy-java/07-configuration/) | Every setting, its `OSPROXY_*`/`osproxy.*` key, default, and meaning. |
 | 8 | [Observability & Control Plane](/osproxy-java/08-observability/) | Tracing, `/_osproxy/explain`, break-glass, runtime directives, OTLP, metrics, and the fleet-debugging model. |
 | 9 | [Async Fan-out Writes](/osproxy-java/09-async-clients/) | The `202`/`op_id` async write mode, mode negotiation, and how a client handles it. |
-| 10 | [Choosing a Mode](/osproxy-java/10-choosing-a-mode/) | Tenanted vs agnostic, sync vs async, capture, FIPS, which layer each knob lives at (build / config / per-request / runtime). |
+| 10 | [Choosing a Mode](/osproxy-java/10-choosing-a-mode/) | The five ways to run osproxy-java: multi-tenant routing, tenant-agnostic routing, traffic capture, zero-downtime migration, and FIPS compliance. |
 | 11 | [Performance](/osproxy-java/11-performance/) | Measured throughput/latency by concurrency, footprint under soak, and a controlled comparison against the Rust `osproxy` sibling project. |
 
 ## At a glance

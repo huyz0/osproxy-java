@@ -79,42 +79,17 @@ These are deliberate cuts.
 
 ## Who uses it, and how
 
-Three jobs drove the design. Logical-index tenancy, where clients address
-logical indices and the proxy resolves the physical cluster and index from a
-partition key. Interception, where auth and telemetry apply uniformly to all
-traffic at the proxy boundary. And operational agility, where partitions
-migrate between placements with the proxy guaranteeing write correctness
-across the cutover.
+Five concrete jobs drove the design: multi-tenant routing (the default),
+tenant-agnostic routing (plain reverse proxy, or both at once with
+staged onboarding), traffic capture for telemetry and debugging,
+zero-downtime cluster migration, and a FIPS-compliant build for regulated
+environments. [Choosing a Mode](/osproxy-java/10-choosing-a-mode/) walks
+through each with the config or code that gets you there.
 
 You consume it by depending on `osproxy-spi`, implementing `TenancySpi` (and
 optionally a custom `Sink`/`Reader`, or `Router`), and assembling the
 pipeline, handler, and Helidon `WebServer` in `main`. See
 [The SPI](/osproxy-java/05-spi-guide/) and
 [Wiring It Together](/osproxy-java/06-wiring-example/).
-
-## Tenant-agnostic mode
-
-osproxy-java also runs without tenancy. Set `osproxy.passthrough-cluster` (+
-`osproxy.passthrough-endpoint`) and the proxy forwards every request verbatim
-to one cluster with no partition resolution, no body rewrite, and no
-isolation. On its own that is a plain reverse proxy with osproxy-java's auth,
-TLS, pooling, and observability.
-
-**One proxy, both modes.** Add `osproxy.passthrough-indices` (a
-comma-separated list of logical-index prefixes) and *only* those indices pass
-through verbatim. Every other index stays fully tenant-isolated. This is the
-migration shape: a not-yet-onboarded (legacy) index flows through untouched
-while the indices you have onboarded are tenanted, on the same instance, with
-no second deployment. The match is per request, **fail-closed** (an index
-that does not match keeps tenancy), and keyed on the operator-configured
-index list only, never a client header, so a client cannot opt itself out of
-isolation.
-
-Pair it with the `Capture` seam (`osproxy-capture`) and you get a capture
-proxy: forward to the source cluster while teeing the raw request and
-response to a durable stream (Kafka) for later replay against a target.
-Capture is off by default and records full-fidelity bodies, so the stream is
-privileged and you enable it deliberately; redaction (dropping
-`Authorization`) composes in via `Capture.redacting(...)`.
 
 → [Requirements & NFRs](/osproxy-java/02-requirements-and-nfrs/)
