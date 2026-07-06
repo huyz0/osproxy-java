@@ -93,7 +93,16 @@ public final class Main {
             observability.withDiagnosticSink(new StdoutDiagnosticSink());
         }
         if (cfg.tenantMetricsEnabled()) {
-            observability.withTenantMetrics(new io.osproxy.observe.TenantMetrics());
+            var tenantMetrics = new io.osproxy.observe.TenantMetrics();
+            observability.withTenantMetrics(tenantMetrics);
+            // OTLP export of tenant counters piggybacks on the same
+            // otlp-endpoint config as span export; a deployment that wants
+            // per-tenant counters but not OTLP still gets them at
+            // /_osproxy/metrics/tenants, this is purely additive.
+            cfg.otlpEndpoint().ifPresent(endpoint -> new TenantMetricsExportScheduler(
+                    tenantMetrics,
+                    new io.osproxy.otlp.OtlpHttpMetricsExporter(endpoint, cfg.serviceName()),
+                    cfg.tenantMetricsExportIntervalSeconds() * 1000L));
         }
         BearerAuth auth = new BearerAuth(cfg.tokens());
         AppHandler handler = new AppHandler(

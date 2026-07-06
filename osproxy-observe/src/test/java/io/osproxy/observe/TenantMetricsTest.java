@@ -27,6 +27,37 @@ class TenantMetricsTest {
     }
 
     @Test
+    void prometheusTextCarriesHelpAndTypeMetadataOncePerMetric() {
+        var metrics = new TenantMetrics();
+        metrics.record("acme", 200, 100);
+        String text = metrics.toPrometheusText();
+        assertThat(text)
+                .contains("# HELP osproxy_tenant_requests_total")
+                .contains("# TYPE osproxy_tenant_requests_total counter")
+                .contains("# HELP osproxy_tenant_failures_total")
+                .contains("# TYPE osproxy_tenant_failures_total counter")
+                .contains("# HELP osproxy_tenant_latency_nanos_total")
+                .contains("# TYPE osproxy_tenant_latency_nanos_total counter");
+        // Exactly one HELP/TYPE pair per metric, not one per tenant series.
+        assertThat(text.lines().filter(l -> l.startsWith("# TYPE")).count()).isEqualTo(3);
+    }
+
+    @Test
+    void snapshotExposesRawCountersForNonPrometheusConsumers() {
+        var metrics = new TenantMetrics();
+        metrics.record("acme", 200, 1_000_000);
+        metrics.record("acme", 500, 2_000_000);
+
+        var snapshot = metrics.snapshot();
+        assertThat(snapshot).hasSize(1);
+        var acme = snapshot.get(0);
+        assertThat(acme.tenant()).isEqualTo("acme");
+        assertThat(acme.requests()).isEqualTo(2);
+        assertThat(acme.failures()).isEqualTo(1);
+        assertThat(acme.durationNanos()).isEqualTo(3_000_000);
+    }
+
+    @Test
     void escapesQuotesAndBackslashesInTenantLabels() {
         var metrics = new TenantMetrics();
         metrics.record("weird\"tenant\\", 200, 100);

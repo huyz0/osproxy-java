@@ -7,6 +7,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.helidon.webserver.WebServer;
 import io.osproxy.core.EndpointKind;
 import io.osproxy.observe.ExplainDoc;
+import io.osproxy.observe.TenantMetrics;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
@@ -74,6 +76,59 @@ class OtlpTest {
             // A dead collector: export returns immediately, nothing thrown.
             var dead = new OtlpHttpExporter("http://localhost:1", "osproxy");
             dead.export(DOC, "00f067aa0ba902b7", 1);
+        } finally {
+            collector.stop();
+        }
+    }
+
+    @Test
+    void theMetricsEncoderEmitsCumulativeSumsPerTenant() throws Exception {
+        var snapshot = List.of(
+                new TenantMetrics.TenantSnapshot("acme", 3, 1, 6_000_000),
+                new TenantMetrics.TenantSnapshot("globex", 1, 0, 500_000));
+        byte[] encoded = OtlpMetricsEncoder.encode("osproxy", snapshot, 2_000_000_000L);
+        JsonNode root = new ObjectMapper().readTree(encoded);
+        assertThat(root.at("/resourceMetrics/0/resource/attributes/0/value/stringValue")
+                .textValue()).isEqualTo("osproxy");
+        JsonNode metrics = root.at("/resourceMetrics/0/scopeMetrics/0/metrics");
+        assertThat(metrics).hasSize(3);
+        JsonNode requests = metrics.get(0);
+        assertThat(requests.get("name").textValue()).isEqualTo("osproxy_tenant_requests_total");
+        assertThat(requests.at("/sum/aggregationTemporality").intValue()).isEqualTo(2);
+        assertThat(requests.at("/sum/isMonotonic").booleanValue()).isTrue();
+        JsonNode points = requests.at("/sum/dataPoints");
+        assertThat(points).hasSize(2);
+        assertThat(points.get(0).get("asInt").textValue()).isEqualTo("3");
+        assertThat(points.get(0).at("/attributes/0/value/stringValue").textValue())
+                .isEqualTo("acme");
+        assertThat(points.get(0).get("timeUnixNano").textValue()).isEqualTo("2000000000");
+    }
+
+    @Test
+    void theHttpMetricsExporterPostsToV1MetricsAndNeverThrows() {
+        ConcurrentLinkedQueue<String> received = new ConcurrentLinkedQueue<>();
+        WebServer collector = WebServer.builder()
+                .port(0)
+                .routing(r -> r.post("/v1/metrics", (req, res) -> {
+                    received.add(req.content().as(String.class));
+                    res.send("{}");
+                }))
+                .build()
+                .start();
+        try {
+            var exporter = new OtlpHttpMetricsExporter(
+                    "http://localhost:" + collector.port(), "osproxy");
+            assertThat(exporter.enabled()).isTrue();
+            exporter.export(
+                    List.of(new TenantMetrics.TenantSnapshot("acme", 1, 0, 1)),
+                    2_000_000_000L);
+            Awaitility.await().atMost(5, TimeUnit.SECONDS)
+                    .until(() -> !received.isEmpty());
+            assertThat(received.peek()).contains("osproxy_tenant_requests_total");
+
+            // A dead collector: export returns immediately, nothing thrown.
+            var dead = new OtlpHttpMetricsExporter("http://localhost:1", "osproxy");
+            dead.export(List.of(), 1);
         } finally {
             collector.stop();
         }

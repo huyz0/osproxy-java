@@ -80,6 +80,9 @@ import java.util.Optional;
  *     false: no per-tenant cardinality is ever allocated). Gated by {@code
  *     debugEndpoints} like the other operational-metadata surfaces, since
  *     unlike {@code /_osproxy/metrics} it does carry tenant identifiers.
+ * @param tenantMetricsExportIntervalSeconds how often a live tenant-metrics
+ *     snapshot is pushed to {@code otlpEndpoint} as OTLP metrics, when both
+ *     {@code tenantMetricsEnabled} and {@code otlpEndpoint} are set
  */
 public record ProxyConfig(
         int port,
@@ -112,7 +115,8 @@ public record ProxyConfig(
         Optional<String> adminCluster,
         Optional<String> adminEndpoint,
         List<String> adminAllowedPrefixes,
-        boolean tenantMetricsEnabled) {
+        boolean tenantMetricsEnabled,
+        int tenantMetricsExportIntervalSeconds) {
 
     /** PEM paths for the TLS listener; {@code clientCaPath} enables mTLS. */
     public record TlsSettings(String certPath, String keyPath, Optional<String> clientCaPath) {
@@ -233,7 +237,7 @@ public record ProxyConfig(
                 directivesUrl, directivesPollSeconds, fanoutBootstrapServers, fanoutTopic,
                 placementsUrl, placementsPollSeconds, debugEndpoints, logDiagnosticCaptures,
                 Optional.empty(), Optional.empty(), List.of(), true, List.of(),
-                false, Optional.empty(), Optional.empty(), List.of(), false);
+                false, Optional.empty(), Optional.empty(), List.of(), false, 15);
     }
 
     /** The default request-body cap (32 MiB), matching the Rust proxy. */
@@ -282,6 +286,7 @@ public record ProxyConfig(
         private Optional<String> adminEndpoint = Optional.empty();
         private List<String> adminAllowedPrefixes = List.of();
         private boolean tenantMetricsEnabled;
+        private int tenantMetricsExportIntervalSeconds = 15;
 
         private Builder(int port, String upstream, String index) {
             this.port = port;
@@ -421,6 +426,11 @@ public record ProxyConfig(
             return this;
         }
 
+        public Builder tenantMetricsExportIntervalSeconds(int tenantMetricsExportIntervalSeconds) {
+            this.tenantMetricsExportIntervalSeconds = tenantMetricsExportIntervalSeconds;
+            return this;
+        }
+
         public ProxyConfig build() {
             return new ProxyConfig(
                     port, upstream, index, tokens,
@@ -431,7 +441,7 @@ public record ProxyConfig(
                     passthroughCluster, passthroughEndpoint, passthroughIndices,
                     headerForwardingEnabled, headerForwardingDeny,
                     deleteByQueryExpansion, adminCluster, adminEndpoint, adminAllowedPrefixes,
-                    tenantMetricsEnabled);
+                    tenantMetricsEnabled, tenantMetricsExportIntervalSeconds);
         }
     }
 
@@ -453,6 +463,9 @@ public record ProxyConfig(
         }
         if (placementsPollSeconds <= 0) {
             throw new ConfigException("placements-poll-seconds must be positive");
+        }
+        if (tenantMetricsExportIntervalSeconds <= 0) {
+            throw new ConfigException("tenant-metrics-export-interval-seconds must be positive");
         }
         if (requireTlsForMutation && tls.isEmpty()) {
             throw new ConfigException(
@@ -523,7 +536,8 @@ public record ProxyConfig(
                 root.get("admin-cluster").asString().asOptional(),
                 root.get("admin-endpoint").asString().asOptional(),
                 csv(root.get("admin-allowed-prefixes").asString().asOptional()),
-                root.get("tenant-metrics-enabled").asBoolean().orElse(false));
+                root.get("tenant-metrics-enabled").asBoolean().orElse(false),
+                root.get("tenant-metrics-export-interval-seconds").asInt().orElse(15));
     }
 
     /** A comma-separated list value, trimmed and empties dropped ({@code []} when unset). */

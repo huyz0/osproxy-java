@@ -4,6 +4,7 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Ticker;
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.atomic.LongAdder;
 
 /**
@@ -70,20 +71,55 @@ public final class TenantMetrics {
         c.durationNanos.add(durationNanos);
     }
 
-    /** A Prometheus text snapshot of every currently-live tenant. Labels carry only tenant ids. */
+    /**
+     * A Prometheus exposition-format snapshot of every currently-live
+     * tenant: one {@code # HELP}/{@code # TYPE} pair per metric name (not
+     * per series — the format requires them exactly once), then one sample
+     * line per tenant. Labels carry only tenant ids.
+     */
     public String toPrometheusText() {
         StringBuilder sb = new StringBuilder();
-        byTenant.asMap().forEach((tenant, c) -> {
-            String label = "tenant=\"" + escape(tenant) + "\"";
-            sb.append("osproxy_tenant_requests_total{").append(label).append("} ")
-                    .append(c.count.sum()).append('\n');
-            sb.append("osproxy_tenant_failures_total{").append(label).append("} ")
-                    .append(c.failures.sum()).append('\n');
-            sb.append("osproxy_tenant_latency_nanos_total{").append(label).append("} ")
-                    .append(c.durationNanos.sum()).append('\n');
-        });
+        metricHeader(sb, "osproxy_tenant_requests_total", "counter",
+                "Total requests seen for this tenant.");
+        byTenant.asMap().forEach((tenant, c) -> sample(
+                sb, "osproxy_tenant_requests_total", tenant, c.count.sum()));
+        metricHeader(sb, "osproxy_tenant_failures_total", "counter",
+                "Requests for this tenant that ended in a 4xx/5xx status.");
+        byTenant.asMap().forEach((tenant, c) -> sample(
+                sb, "osproxy_tenant_failures_total", tenant, c.failures.sum()));
+        metricHeader(sb, "osproxy_tenant_latency_nanos_total", "counter",
+                "Cumulative wall-time spent serving this tenant's requests, in nanoseconds.");
+        byTenant.asMap().forEach((tenant, c) -> sample(
+                sb, "osproxy_tenant_latency_nanos_total", tenant, c.durationNanos.sum()));
         return sb.toString();
     }
+
+    private static void metricHeader(StringBuilder sb, String name, String type, String help) {
+        sb.append("# HELP ").append(name).append(' ').append(help).append('\n');
+        sb.append("# TYPE ").append(name).append(' ').append(type).append('\n');
+    }
+
+    private static void sample(StringBuilder sb, String name, String tenant, long value) {
+        sb.append(name).append("{tenant=\"").append(escape(tenant)).append("\"} ")
+                .append(value).append('\n');
+    }
+
+    /**
+     * An immutable snapshot of every currently-live tenant's counters, for a
+     * caller (e.g. an OTLP metrics exporter) that needs the raw numbers
+     * rather than the Prometheus text rendering.
+     */
+    public List<TenantSnapshot> snapshot() {
+        return byTenant.asMap().entrySet().stream()
+                .map(e -> new TenantSnapshot(
+                        e.getKey(), e.getValue().count.sum(),
+                        e.getValue().failures.sum(), e.getValue().durationNanos.sum()))
+                .toList();
+    }
+
+    /** One tenant's counters at snapshot time. */
+    public record TenantSnapshot(
+            String tenant, long requests, long failures, long durationNanos) {}
 
     /** Live tenants right now (bounded by {@code maxEntries}, not all-time count). */
     public long liveEntryCount() {

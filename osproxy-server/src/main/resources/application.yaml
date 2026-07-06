@@ -16,3 +16,4 @@ osproxy:
   #   bootstrap-servers: "localhost:9092"
   #   topic: "osproxy-writes"
   # tenant-metrics-enabled: true
+  # tenant-metrics-export-interval-seconds: 15

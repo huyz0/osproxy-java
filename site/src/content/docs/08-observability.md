@@ -182,6 +182,19 @@ Request size isn't one of the counters: some ingress paths (tenant-agnostic
 passthrough, streamed `_bulk`) deliberately never buffer the whole body, so
 a byte count wouldn't be available uniformly across every endpoint.
 
+The Prometheus text carries `# HELP`/`# TYPE` metadata (once per metric
+name, as the exposition format requires, not once per tenant series), so it
+scrapes cleanly as a `counter` type.
+
+When `osproxy.otlp-endpoint` is also configured, the same counters are
+additionally pushed there as OTLP metrics (`Sum`, cumulative temporality,
+one `tenant` attribute per data point) every
+`tenant-metrics-export-interval-seconds` (default 15s), on a background
+poller — unlike trace export, which fires inline per request, counters are
+cumulative and cheap to snapshot, so a periodic push is the natural shape.
+This is purely additive: the Prometheus endpoint keeps working whether or
+not OTLP export is configured.
+
 ## Structured request logs
 
 `osproxy.log-requests=true` prints one `ExplainDoc` as JSON per request to

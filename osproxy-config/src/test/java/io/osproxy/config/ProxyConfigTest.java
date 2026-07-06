@@ -70,6 +70,26 @@ class ProxyConfigTest {
     }
 
     @Test
+    void tenantMetricsExportIntervalDefaultsToFifteenSecondsAndCanBeOverridden() {
+        var defaults = ProxyConfig.load(config(Map.of(
+                "osproxy.upstream", "http://localhost:9200",
+                "osproxy.index", "shared")));
+        assertThat(defaults.tenantMetricsExportIntervalSeconds()).isEqualTo(15);
+
+        var overridden = ProxyConfig.load(config(Map.of(
+                "osproxy.upstream", "http://localhost:9200",
+                "osproxy.index", "shared",
+                "osproxy.tenant-metrics-export-interval-seconds", "5")));
+        assertThat(overridden.tenantMetricsExportIntervalSeconds()).isEqualTo(5);
+
+        assertThatThrownBy(() -> ProxyConfig.load(config(Map.of(
+                "osproxy.upstream", "http://localhost:9200",
+                "osproxy.index", "shared",
+                "osproxy.tenant-metrics-export-interval-seconds", "0"))))
+                .isInstanceOf(ProxyConfig.ConfigException.class);
+    }
+
+    @Test
     void missingRequiredKeysFailFastWithTheKeyName() {
         assertThatThrownBy(() -> ProxyConfig.load(config(Map.of(
                         "osproxy.index", "shared"))))
