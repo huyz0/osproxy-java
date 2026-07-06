@@ -22,16 +22,19 @@ x-tenant: acme
 {"status":"accepted","op_id":"<broker-assigned offset/id>"}
 ```
 
+`_bulk` supports async too, one HTTP request enqueueing many ops instead of
+one: see [below](#_bulk-in-async-mode).
+
 ## Refuse, don't lie
 
 Async mode is opt-in per request and narrowly scoped:
 
 - **No fan-out sink configured** (`osproxy.fanout.bootstrap-servers` unset)
   → `503`. The proxy never silently falls back to synchronous.
-- **Anything other than a single-doc write** (bulk, search, a multi-op
-  request) with the header set → `400`. Async mode has no batching
-  semantics; asking for it on the wrong endpoint is a client error, not a
-  degraded success.
+- **Anything other than a single-doc write, bulk, or delete-by-query**
+  (search, a multi-get/multi-search) with the header set → `400`. Async
+  mode has no meaning for a read; asking for it on the wrong endpoint is a
+  client error, not a degraded success.
 - **The broker doesn't acknowledge** (timeout, not-enough-replicas) → an
   error, never a `202`. A `202` is a promise the broker actually made; the
   proxy does not fabricate it to look successful.
@@ -52,6 +55,43 @@ whatever consumes the topic downstream (a pull-based indexer, an audit
 log, a replay tool). There is no synchronous "did it land" callback beyond
 the broker ack; if you need to know the document is queryable, poll for it
 or consume the same topic.
+
+## `_bulk` in async mode
+
+The point of async bulk is cutting request count, not enqueue cost: the
+Kafka producer already batches individual `enqueue` calls into fewer
+network sends on its own, whatever the reason to look at bulk here is a
+client doing many small async writes one HTTP call at a time and wanting
+to collapse those into one round trip.
+
+Each item is enqueued on its own, so the response mirrors real bulk's
+`items[]` shape, but with `op_id` in place of the version/result fields a
+synchronous write would have (there is no write result yet, only a durable
+acknowledgement of the enqueue):
+
+```
+POST /_bulk
+x-osproxy-write-mode: async
+x-tenant: acme
+
+{"index":{"_index":"orders","_id":"1"}}
+{"amount":100}
+{"index":{"_index":"orders","_id":"2"}}
+{"amount":200}
+```
+
+```
+200 OK
+{"took":0,"errors":false,"items":[
+  {"index":{"_index":"orders","_id":"1","status":202,"result":"accepted","op_id":"..."}},
+  {"index":{"_index":"orders","_id":"2","status":202,"result":"accepted","op_id":"..."}}
+]}
+```
+
+A per-item enqueue failure is that item's own `status`/`result`, the same
+partial-success contract the synchronous path already has: one item
+failing to enqueue never aborts the rest of the batch, and never fakes a
+202 for an item the broker didn't actually acknowledge.
 
 ## `_delete_by_query`: the async-only expansion
 

@@ -244,7 +244,15 @@ public final class AppHandler {
         // _bulk gets the same treatment for the same reason: its transform
         // is per-item (inject/construct-id), so nothing about it needs the
         // whole body in memory at once — only the buffered read imposed that.
-        if (classified.endpoint() == io.osproxy.core.EndpointKind.INGEST_BULK) {
+        // Excluded in async mode for the same reason single-doc ingest is
+        // below: streamBulk's streaming twin (bulkStreaming) dispatches
+        // straight to the upstream sink with no async handling of its own,
+        // so an async-mode bulk routed here would silently skip the
+        // durable-enqueue contract.
+        if (classified.endpoint() == io.osproxy.core.EndpointKind.INGEST_BULK
+                && !io.osproxy.engine.AsyncWrites.wantsAsync(
+                        req.headers().first(HeaderNames.create(
+                                io.osproxy.engine.AsyncWrites.WRITE_MODE_HEADER)))) {
             streamBulk(req, res, classified, method.get(), principal.get());
             return;
         }

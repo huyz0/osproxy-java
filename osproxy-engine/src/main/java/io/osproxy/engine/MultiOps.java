@@ -50,11 +50,17 @@ final class MultiOps {
         // both report bulk failures per item. prepare() never throws for
         // that condition; it returns an already-failed ItemCtx instead, so
         // only the items that actually need dispatching go into ops.
-        List<WriteBatch.Op> ops = new ArrayList<>(items.size());
         List<ItemCtx> contexts = new ArrayList<>(items.size());
         for (Bulk.Item item : items) {
-            ItemCtx ic = prepare(ctx, item);
-            contexts.add(ic);
+            contexts.add(prepare(ctx, item));
+        }
+
+        if (AsyncWrites.wantsAsync(ctx)) {
+            return bulkAsync(contexts);
+        }
+
+        List<WriteBatch.Op> ops = new ArrayList<>(items.size());
+        for (ItemCtx ic : contexts) {
             ic.op().ifPresent(ops::add);
         }
         WriteBatch.Ack ack = pipeline.sink().write(ops);
@@ -77,6 +83,58 @@ final class MultiOps {
         }
         out.put("errors", errors);
         return new PipelineResponse(200, Json.writeBytes(out));
+    }
+
+    /**
+     * Bulk's async twin: each item is enqueued individually (the broker's
+     * own producer batching, not this loop, is what amortizes the network
+     * cost, see {@code AsyncWrites.enqueue}), and the response mirrors real
+     * bulk's {@code items[]} shape, each entry replacing the usual
+     * {@code result}/version fields with {@code op_id} (there is no write
+     * result yet, only a durable acknowledgement of the enqueue). A
+     * per-item enqueue failure is that item's own {@code status}, same
+     * partial-success contract as the synchronous path; it never aborts
+     * the rest of the batch.
+     */
+    private PipelineResponse bulkAsync(List<ItemCtx> contexts) {
+        AsyncWrites.AsyncWriteSink sink = pipeline.asyncSink().orElseThrow();
+        ObjectNode out = Json.MAPPER.createObjectNode();
+        out.put("took", 0);
+        boolean errors = false;
+        ArrayNode itemsOut = out.putArray("items");
+        for (ItemCtx ic : contexts) {
+            ObjectNode verb = itemsOut.addObject().putObject(ic.verbKey());
+            verb.put("_index", ic.logicalIndex());
+            verb.put("_id", ic.logicalId());
+            if (ic.op().isEmpty()) {
+                WriteBatch.OpResult failure = ic.preparedFailure().orElseThrow();
+                errors = true;
+                verb.put("status", failure.status());
+                verb.put("result", failure.result());
+                continue;
+            }
+            PipelineResponse enqueued = AsyncWrites.enqueue(sink, ic.op().get());
+            verb.put("status", enqueued.status());
+            if (enqueued.status() == 202) {
+                verb.put("result", "accepted");
+                verb.put("op_id", opId(enqueued.body()));
+            } else {
+                errors = true;
+                verb.put("result", "error");
+            }
+        }
+        out.put("errors", errors);
+        return new PipelineResponse(200, Json.writeBytes(out));
+    }
+
+    /** Pulls {@code op_id} back out of an accepted {@code AsyncWrites.enqueue} body. */
+    private static String opId(byte[] acceptedBody) {
+        try {
+            return Json.MAPPER.readTree(acceptedBody).path("op_id").asText();
+        } catch (java.io.IOException e) {
+            // enqueue() only ever hands back its own well-formed body on 202.
+            throw new IllegalStateException("accepted enqueue body must be valid json", e);
+        }
     }
 
     /**

@@ -157,6 +157,10 @@ public final class Pipeline {
         return sink;
     }
 
+    Optional<AsyncWrites.AsyncWriteSink> asyncSink() {
+        return asyncSink;
+    }
+
     /**
      * The reader, exposed so the ingress can drive a streaming passthrough
      * forward directly (see {@link #passthroughPolicy()}).
@@ -297,18 +301,19 @@ public final class Pipeline {
             }
             if (AsyncWrites.wantsAsync(ctx)) {
                 // Refuse-don't-lie: async mode exists only for single-doc
-                // writes and delete-by-query, and only when a durable sink is
-                // wired. Delete-by-query has its own checks below (different
-                // response shapes matching its own refuse-don't-lie contract),
-                // so it is exempted from this generic gate. Status codes and
-                // body shape match the Rust project's own
-                // unsupported_response (400)/unavailable_response (422)
-                // exactly — a missing queue is refused, never
-                // accepted-and-dropped, and 422 is a distinct signal from a
-                // transient 503 (the config genuinely won't work, retrying
-                // won't help).
+                // writes, bulk, and delete-by-query, and only when a durable
+                // sink is wired. Delete-by-query has its own checks below
+                // (different response shapes matching its own
+                // refuse-don't-lie contract), so it is exempted from this
+                // generic gate. Status codes and body shape match the Rust
+                // project's own unsupported_response (400)/
+                // unavailable_response (422) exactly — a missing queue is
+                // refused, never accepted-and-dropped, and 422 is a distinct
+                // signal from a transient 503 (the config genuinely won't
+                // work, retrying won't help).
                 String index = ctx.logicalIndex().orElse("");
                 if (ctx.endpoint() != io.osproxy.core.EndpointKind.INGEST_DOC
+                        && ctx.endpoint() != io.osproxy.core.EndpointKind.INGEST_BULK
                         && ctx.endpoint() != io.osproxy.core.EndpointKind.DELETE_BY_ID
                         && ctx.endpoint() != io.osproxy.core.EndpointKind.DELETE_BY_QUERY) {
                     return asyncUnsupported(

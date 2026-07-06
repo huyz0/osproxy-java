@@ -83,6 +83,44 @@ class PipelineAsyncWriteTest {
     }
 
     @Test
+    void anAsyncBulkEnqueuesEachItemAndReportsPerItemOpIds() throws Exception {
+        var recorder = new RecordingSink();
+        var sink = new MemorySink();
+        var pipeline = pipeline(sink, recorder);
+        String ndjson = """
+                {"index":{"_index":"orders","_id":"10"}}
+                {"m":"a"}
+                {"create":{"_index":"orders","_id":"11"}}
+                {"m":"b"}
+                """;
+
+        PipelineResponse resp = pipeline.handle(asyncRequest(
+                HttpMethod.POST, "/_bulk", ndjson.getBytes()));
+        assertThat(resp.status()).isEqualTo(200);
+        JsonNode body = json(resp);
+        assertThat(body.get("errors").booleanValue()).isFalse();
+        JsonNode items = body.get("items");
+        assertThat(items).hasSize(2);
+        for (JsonNode item : items) {
+            JsonNode verb = item.elements().next();
+            assertThat(verb.get("status").intValue()).isEqualTo(202);
+            assertThat(verb.get("result").textValue()).isEqualTo("accepted");
+            assertThat(verb.get("op_id").textValue()).hasSize(32);
+        }
+        // Each item enqueued on its own, fully transformed, nothing written
+        // synchronously.
+        assertThat(recorder.envelopes).hasSize(2);
+        assertThat(pipeline.handle(PipelineTestSupport.request(
+                        HttpMethod.GET, "/orders/_doc/10", "acme"))
+                .status()).isEqualTo(404);
+
+        // Bulk with no queue wired: 422, same as single-doc.
+        var noSink = pipeline(sink, null);
+        assertThat(noSink.handle(asyncRequest(HttpMethod.POST, "/_bulk", ndjson.getBytes()))
+                .status()).isEqualTo(422);
+    }
+
+    @Test
     void refuseDontLie() {
         var sink = new MemorySink();
         var recorder = new RecordingSink();
@@ -102,12 +140,10 @@ class PipelineAsyncWriteTest {
                         HttpMethod.PUT, "/orders/_doc/1", "{}".getBytes()))
                 .status()).isEqualTo(503);
 
-        // Async on anything but a single-doc write: 400.
+        // Async on anything but a single-doc write, bulk, or delete-by-query:
+        // 400. Reads (get, search) have no write to defer at all.
         recorder.failing = false;
         var ok = pipeline(sink, recorder);
-        assertThat(ok.handle(asyncRequest(
-                        HttpMethod.POST, "/_bulk", "{\"index\":{}}\n{}\n".getBytes()))
-                .status()).isEqualTo(400);
         assertThat(ok.handle(asyncRequest(HttpMethod.GET, "/orders/_doc/1", new byte[0]))
                 .status()).isEqualTo(400);
         assertThat(ok.handle(asyncRequest(

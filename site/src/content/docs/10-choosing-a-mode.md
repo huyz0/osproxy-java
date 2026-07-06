@@ -143,10 +143,10 @@ a property.
 
 ## Sync vs async writes
 
-Synchronous is the default and the only mode search/bulk/multi-op
-endpoints support. Async is opt-in per request, single-doc only, and
-requires `osproxy.fanout.bootstrap-servers` to be configured. See
-[Async Fan-out Writes](/osproxy-java/09-async-clients/).
+Synchronous is the default and the only mode search and multi-get/
+multi-search support. Async is opt-in per request (single-doc write,
+bulk, or delete-by-query) and requires `osproxy.fanout.bootstrap-servers`
+to be configured. See [Async Fan-out Writes](/osproxy-java/09-async-clients/).
 
 ## Why not one big "make it all dynamic" switch?
 

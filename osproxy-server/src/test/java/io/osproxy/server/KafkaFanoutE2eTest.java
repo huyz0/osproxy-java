@@ -101,6 +101,45 @@ class KafkaFanoutE2eTest {
     }
 
     @Test
+    void anAsyncBulkEnqueuesEachItemAndTheyAllLandOnTheTopic() throws Exception {
+        String ndjson = """
+                {"index":{"_index":"orders","_id":"20"}}
+                {"msg":"a"}
+                {"index":{"_index":"orders","_id":"21"}}
+                {"msg":"b"}
+                """;
+        var post = HttpRequest.newBuilder(URI.create(base + "/_bulk"))
+                .POST(HttpRequest.BodyPublishers.ofString(ndjson))
+                .header("x-tenant", "acme")
+                .header("x-osproxy-write-mode", "async")
+                .build();
+        HttpResponse<String> resp = client.send(post, HttpResponse.BodyHandlers.ofString());
+        assertThat(resp.statusCode()).isEqualTo(200);
+        assertThat(resp.body())
+                .contains("\"errors\":false")
+                .contains("\"status\":202")
+                .contains("\"result\":\"accepted\"");
+
+        Properties props = new Properties();
+        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers());
+        props.put(ConsumerConfig.GROUP_ID_CONFIG, "e2e-bulk");
+        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        try (var consumer = new KafkaConsumer<>(
+                props, new StringDeserializer(), new StringDeserializer())) {
+            consumer.subscribe(List.of("osproxy-writes"));
+            List<org.apache.kafka.clients.consumer.ConsumerRecord<String, String>> seen =
+                    new java.util.ArrayList<>();
+            long deadline = System.currentTimeMillis() + 30_000;
+            while (seen.size() < 2 && System.currentTimeMillis() < deadline) {
+                consumer.poll(Duration.ofSeconds(1)).forEach(seen::add);
+            }
+            assertThat(seen)
+                    .extracting(org.apache.kafka.clients.consumer.ConsumerRecord::key)
+                    .contains("acme:20", "acme:21");
+        }
+    }
+
+    @Test
     void aSyncWriteStillRefusesNothing() throws Exception {
         // Without the header the write goes the sync path — and fails against
         // the dead upstream with an upstream error, never a fake success.
