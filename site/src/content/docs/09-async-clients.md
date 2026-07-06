@@ -35,6 +35,14 @@ Async mode is opt-in per request and narrowly scoped:
   (search, a multi-get/multi-search) with the header set → `400`. Async
   mode has no meaning for a read; asking for it on the wrong endpoint is a
   client error, not a degraded success.
+- **`_update_by_query` and scripted/partial `_update`** aren't classified
+  as an endpoint at all, so they fall into the same `400` above. This is a
+  structural cut, not an unimplemented one: delete-by-query only needs the
+  matched `_id`s, so the proxy can run the match query itself and enqueue
+  a concrete delete per id. An update needs read-modify-write against
+  whatever the document's state is when it actually runs, and the proxy
+  cannot evaluate that at enqueue time without racing the real state
+  underneath the queued op.
 - **The broker doesn't acknowledge** (timeout, not-enough-replicas) → an
   error, never a `202`. A `202` is a promise the broker actually made; the
   proxy does not fabricate it to look successful.
