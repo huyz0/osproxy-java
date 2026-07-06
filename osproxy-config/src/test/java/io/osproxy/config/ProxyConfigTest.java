@@ -51,6 +51,25 @@ class ProxyConfigTest {
     }
 
     @Test
+    void tenantMetricsEnabledDefaultsOffAndCanBeEnabled() {
+        var defaults = ProxyConfig.load(config(Map.of(
+                "osproxy.upstream", "http://localhost:9200",
+                "osproxy.index", "shared")));
+        assertThat(defaults.tenantMetricsEnabled()).isFalse();
+
+        var enabled = ProxyConfig.load(config(Map.of(
+                "osproxy.upstream", "http://localhost:9200",
+                "osproxy.index", "shared",
+                "osproxy.tenant-metrics-enabled", "true")));
+        assertThat(enabled.tenantMetricsEnabled()).isTrue();
+
+        var built = ProxyConfig.builder(9200, "http://localhost:9200", "shared")
+                .tenantMetricsEnabled(true)
+                .build();
+        assertThat(built.tenantMetricsEnabled()).isTrue();
+    }
+
+    @Test
     void missingRequiredKeysFailFastWithTheKeyName() {
         assertThatThrownBy(() -> ProxyConfig.load(config(Map.of(
                         "osproxy.index", "shared"))))

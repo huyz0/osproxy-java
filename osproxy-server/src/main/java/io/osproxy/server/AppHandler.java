@@ -33,6 +33,9 @@ public final class AppHandler {
     /** The break-glass tape read: recent explanations captured on demand. */
     public static final String BREAKGLASS_PATH = "/_osproxy/breakglass";
 
+    /** The opt-in per-tenant counters (Prometheus text), when enabled. */
+    public static final String TENANT_METRICS_PATH = "/_osproxy/metrics/tenants";
+
     /** Echoed on every response so a client can look its request up. */
     public static final String REQUEST_ID_HEADER = "x-osproxy-request-id";
 
@@ -191,6 +194,19 @@ public final class AppHandler {
             res.status(Status.OK_200)
                     .header(HeaderNames.CONTENT_TYPE, "application/json")
                     .send("[" + String.join(",", tape) + "]");
+            return;
+        }
+        if (rawPath.equals(TENANT_METRICS_PATH)) {
+            // Unlike METRICS_PATH, this carries tenant identifiers, so it is
+            // gated the same way as the other operational-metadata surfaces
+            // (debugEndpoints) rather than always staying on.
+            if (!debugEndpoints || observability.tenantMetrics().isEmpty()) {
+                sendNotEnabled(res);
+                return;
+            }
+            res.status(Status.OK_200)
+                    .header(HeaderNames.CONTENT_TYPE, "text/plain; version=0.0.4")
+                    .send(observability.tenantMetrics().get().toPrometheusText());
             return;
         }
         if (rawPath.startsWith(EXPLAIN_PREFIX)) {

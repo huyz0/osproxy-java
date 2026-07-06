@@ -10,6 +10,7 @@ import io.osproxy.observe.DirectiveSet;
 import io.osproxy.observe.ExplainDoc;
 import io.osproxy.observe.ExplainStore;
 import io.osproxy.observe.Metrics;
+import io.osproxy.observe.TenantMetrics;
 import java.io.PrintStream;
 import java.util.Optional;
 
@@ -29,6 +30,7 @@ public final class Observability {
     private final Clock clock;
     private io.osproxy.observe.SpanExporter exporter = io.osproxy.observe.SpanExporter.NOOP;
     private DiagnosticSink diagnosticSink = DiagnosticSink.NOOP;
+    private Optional<TenantMetrics> tenantMetrics = Optional.empty();
 
     public Observability(int explainCapacity, Optional<PrintStream> requestLog) {
         this(explainCapacity, requestLog,
@@ -61,9 +63,24 @@ public final class Observability {
         return this;
     }
 
+    /**
+     * Enables the opt-in per-tenant counters (default: absent, no per-tenant
+     * cardinality allocated anywhere). See {@link TenantMetrics}'s javadoc
+     * for why this is the one place tenant values are allowed to appear.
+     */
+    public Observability withTenantMetrics(TenantMetrics tenantMetrics) {
+        this.tenantMetrics = Optional.of(tenantMetrics);
+        return this;
+    }
+
     /** The exporter (the handler feeds it when enabled). */
     public io.osproxy.observe.SpanExporter exporter() {
         return exporter;
+    }
+
+    /** The opt-in per-tenant counters, when enabled. */
+    public Optional<TenantMetrics> tenantMetrics() {
+        return tenantMetrics;
     }
 
     /** The directive store (the admin endpoint publishes into it). */
@@ -78,6 +95,7 @@ public final class Observability {
     /** Records one completed request at the directive-effective level. */
     public void record(ExplainDoc doc, Directive.RequestAttrs attrs) {
         metrics.record(doc.status());
+        tenantMetrics.ifPresent(m -> m.record(attrs.tenant(), doc.status(), doc.durationNanos()));
         long now = clock.monotonicNanos();
         DirectiveSet snapshot = directives.load();
         DiagLevel level = snapshot.evaluate(attrs, doc.requestId(), now);

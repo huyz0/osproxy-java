@@ -92,6 +92,9 @@ public final class Main {
         if (cfg.logDiagnosticCaptures()) {
             observability.withDiagnosticSink(new StdoutDiagnosticSink());
         }
+        if (cfg.tenantMetricsEnabled()) {
+            observability.withTenantMetrics(new io.osproxy.observe.TenantMetrics());
+        }
         BearerAuth auth = new BearerAuth(cfg.tokens());
         AppHandler handler = new AppHandler(
                 pipeline, auth,

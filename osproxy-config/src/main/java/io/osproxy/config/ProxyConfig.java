@@ -75,6 +75,11 @@ import java.util.Optional;
  * @param adminAllowedPrefixes path prefixes permitted through to {@code
  *     adminCluster} (e.g. {@code "/_cat/"}); empty allows nothing even with
  *     a cluster configured
+ * @param tenantMetricsEnabled opt into bounded per-tenant request/failure/
+ *     latency counters at {@code GET /_osproxy/metrics/tenants} (default
+ *     false: no per-tenant cardinality is ever allocated). Gated by {@code
+ *     debugEndpoints} like the other operational-metadata surfaces, since
+ *     unlike {@code /_osproxy/metrics} it does carry tenant identifiers.
  */
 public record ProxyConfig(
         int port,
@@ -106,7 +111,8 @@ public record ProxyConfig(
         boolean deleteByQueryExpansion,
         Optional<String> adminCluster,
         Optional<String> adminEndpoint,
-        List<String> adminAllowedPrefixes) {
+        List<String> adminAllowedPrefixes,
+        boolean tenantMetricsEnabled) {
 
     /** PEM paths for the TLS listener; {@code clientCaPath} enables mTLS. */
     public record TlsSettings(String certPath, String keyPath, Optional<String> clientCaPath) {
@@ -227,7 +233,7 @@ public record ProxyConfig(
                 directivesUrl, directivesPollSeconds, fanoutBootstrapServers, fanoutTopic,
                 placementsUrl, placementsPollSeconds, debugEndpoints, logDiagnosticCaptures,
                 Optional.empty(), Optional.empty(), List.of(), true, List.of(),
-                false, Optional.empty(), Optional.empty(), List.of());
+                false, Optional.empty(), Optional.empty(), List.of(), false);
     }
 
     /** The default request-body cap (32 MiB), matching the Rust proxy. */
@@ -275,6 +281,7 @@ public record ProxyConfig(
         private Optional<String> adminCluster = Optional.empty();
         private Optional<String> adminEndpoint = Optional.empty();
         private List<String> adminAllowedPrefixes = List.of();
+        private boolean tenantMetricsEnabled;
 
         private Builder(int port, String upstream, String index) {
             this.port = port;
@@ -409,6 +416,11 @@ public record ProxyConfig(
             return this;
         }
 
+        public Builder tenantMetricsEnabled(boolean tenantMetricsEnabled) {
+            this.tenantMetricsEnabled = tenantMetricsEnabled;
+            return this;
+        }
+
         public ProxyConfig build() {
             return new ProxyConfig(
                     port, upstream, index, tokens,
@@ -418,7 +430,8 @@ public record ProxyConfig(
                     placementsUrl, placementsPollSeconds, debugEndpoints, logDiagnosticCaptures,
                     passthroughCluster, passthroughEndpoint, passthroughIndices,
                     headerForwardingEnabled, headerForwardingDeny,
-                    deleteByQueryExpansion, adminCluster, adminEndpoint, adminAllowedPrefixes);
+                    deleteByQueryExpansion, adminCluster, adminEndpoint, adminAllowedPrefixes,
+                    tenantMetricsEnabled);
         }
     }
 
@@ -509,7 +522,8 @@ public record ProxyConfig(
                 root.get("delete-by-query-expansion").asBoolean().orElse(false),
                 root.get("admin-cluster").asString().asOptional(),
                 root.get("admin-endpoint").asString().asOptional(),
-                csv(root.get("admin-allowed-prefixes").asString().asOptional()));
+                csv(root.get("admin-allowed-prefixes").asString().asOptional()),
+                root.get("tenant-metrics-enabled").asBoolean().orElse(false));
     }
 
     /** A comma-separated list value, trimmed and empties dropped ({@code []} when unset). */

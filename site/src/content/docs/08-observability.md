@@ -158,6 +158,30 @@ Pre-auth, unauthenticated, shape-only counts (`requests_total`,
 The one introspection surface meant to stay reachable even when `/debug` is
 off and credentials are broken.
 
+## `/_osproxy/metrics/tenants`, opt-in per-tenant counters
+
+The aggregate `/_osproxy/metrics` above never carries a tenant value, on
+purpose: request/failure/latency counters broken out per tenant would be
+unbounded cardinality on a fleet with many tenants, and a Prometheus-style
+scrape target does not tolerate that well. `osproxy.tenant-metrics-enabled`
+(default `false`) opts into exactly that breakdown when you do need it,
+served as Prometheus text at `/_osproxy/metrics/tenants`
+(`osproxy_tenant_requests_total`, `osproxy_tenant_failures_total`,
+`osproxy_tenant_latency_nanos_total`, each labeled `tenant="..."`).
+
+Cardinality stays bounded two ways rather than one: a tenant idle for 15
+minutes is evicted, and a hard cap (50k live tenants) protects against a
+burst of one-off or adversarial tenant ids before the idle timer would ever
+apply. Exported cardinality is therefore bounded by how many tenants are
+live right now, never by how many have ever existed. Unlike
+`/_osproxy/metrics`, this endpoint does carry tenant identifiers, so it is
+gated by the same `debug-endpoints` switch as `/_osproxy/explain` and
+`/_osproxy/breakglass` rather than staying always-on.
+
+Request size isn't one of the counters: some ingress paths (tenant-agnostic
+passthrough, streamed `_bulk`) deliberately never buffer the whole body, so
+a byte count wouldn't be available uniformly across every endpoint.
+
 ## Structured request logs
 
 `osproxy.log-requests=true` prints one `ExplainDoc` as JSON per request to

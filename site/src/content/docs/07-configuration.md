@@ -42,6 +42,7 @@ the meaning of an existing positional call.
 | `osproxy.log-requests` | `false` | Emit one shape-only JSON line per request to stdout; also raises the observability baseline to `VERBOSE`. |
 | `osproxy.debug-endpoints` | `true` | Serve `/_osproxy/explain` and `/_osproxy/breakglass`; `false` in production reports `not_enabled` instead. `/_osproxy/metrics` always stays on. |
 | `osproxy.log-diagnostic-captures` | `false` | Also push each `ring_buffer`-selected explain doc to stdout as a tagged JSON line, the fleet-coherent counterpart of the local break-glass ring. |
+| `osproxy.tenant-metrics-enabled` | `false` | Serve bounded per-tenant request/failure/latency counters at `/_osproxy/metrics/tenants` (Prometheus text), gated by `debug-endpoints` like `explain`/`breakglass`. See [Observability](/osproxy-java/08-observability/). |
 | `osproxy.directive-admin-token` | *(none)* | Bearer token gating `POST/GET /_osproxy/admin/directives`; absent means the endpoint does not exist. |
 | `osproxy.otlp-endpoint` | *(none)* | OTLP collector base URL; absent means no span export. |
 | `osproxy.service-name` | `osproxy` | Service name attached to exported spans. |

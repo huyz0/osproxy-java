@@ -361,6 +361,102 @@ class ObservabilityLoopbackTest {
         }
     }
 
+    @Test
+    void tenantMetricsIsOffByDefaultAndOptInOnceEnabled() throws Exception {
+        var observability = new Observability(16, Optional.empty());
+        MemorySink sink = new MemorySink();
+        Pipeline pipeline = new Pipeline(
+                new TenancyRouter(new ReferenceTenancy(
+                        new ClusterId("primary"), new IndexName("shared"))),
+                sink, sink);
+        WebServer server = WebServer.builder()
+                .port(0)
+                .routing(new AppHandler(
+                        pipeline, new BearerAuth(Map.of()),
+                        1 << 20, false, observability)::route)
+                .build()
+                .start();
+        try {
+            var client = HttpClient.newHttpClient();
+            String base = "http://localhost:" + server.port();
+
+            // Not enabled: same not_enabled contract as the other debug surfaces.
+            var off = client.send(
+                    HttpRequest.newBuilder(URI.create(base + AppHandler.TENANT_METRICS_PATH))
+                            .GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertThat(off.statusCode()).isEqualTo(404);
+            assertThat(off.body()).contains("not_enabled");
+        } finally {
+            server.stop();
+        }
+
+        var enabledObservability = new Observability(16, Optional.empty())
+                .withTenantMetrics(new io.osproxy.observe.TenantMetrics());
+        Pipeline enabledPipeline = new Pipeline(
+                new TenancyRouter(new ReferenceTenancy(
+                        new ClusterId("primary"), new IndexName("shared"))),
+                sink, sink);
+        WebServer enabledServer = WebServer.builder()
+                .port(0)
+                .routing(new AppHandler(
+                        enabledPipeline, new BearerAuth(Map.of()),
+                        1 << 20, false, enabledObservability)::route)
+                .build()
+                .start();
+        try {
+            var client = HttpClient.newHttpClient();
+            String base = "http://localhost:" + enabledServer.port();
+
+            client.send(HttpRequest.newBuilder(URI.create(base + "/orders/_doc/1"))
+                            .PUT(HttpRequest.BodyPublishers.ofString("{}"))
+                            .header("x-tenant", "acme").build(),
+                    HttpResponse.BodyHandlers.ofString());
+
+            var tenantMetrics = client.send(
+                    HttpRequest.newBuilder(URI.create(base + AppHandler.TENANT_METRICS_PATH))
+                            .GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertThat(tenantMetrics.statusCode()).isEqualTo(200);
+            assertThat(tenantMetrics.body())
+                    .contains("osproxy_tenant_requests_total{tenant=\"acme\"} 1")
+                    .contains("osproxy_tenant_failures_total{tenant=\"acme\"} 0");
+        } finally {
+            enabledServer.stop();
+        }
+    }
+
+    @Test
+    void tenantMetricsIsAlsoRefusedWhenDebugEndpointsAreDisabled() throws Exception {
+        var observability = new Observability(16, Optional.empty())
+                .withTenantMetrics(new io.osproxy.observe.TenantMetrics());
+        MemorySink sink = new MemorySink();
+        Pipeline pipeline = new Pipeline(
+                new TenancyRouter(new ReferenceTenancy(
+                        new ClusterId("primary"), new IndexName("shared"))),
+                sink, sink);
+        WebServer server = WebServer.builder()
+                .port(0)
+                .routing(new AppHandler(
+                                pipeline, new BearerAuth(Map.of()),
+                                1 << 20, false, observability)
+                        .withDebugEndpoints(false)::route)
+                .build()
+                .start();
+        try {
+            var client = HttpClient.newHttpClient();
+            String base = "http://localhost:" + server.port();
+            var resp = client.send(
+                    HttpRequest.newBuilder(URI.create(base + AppHandler.TENANT_METRICS_PATH))
+                            .GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertThat(resp.statusCode()).isEqualTo(404);
+            assertThat(resp.body()).contains("not_enabled");
+        } finally {
+            server.stop();
+        }
+    }
+
     private static String fetchBreakGlass(HttpClient client, String base) throws Exception {
         var resp = client.send(
                 HttpRequest.newBuilder(URI.create(base + AppHandler.BREAKGLASS_PATH))

@@ -17,6 +17,10 @@ remember to uphold.
 
 - `Metrics`: always-on atomics (request counts, per-cluster pool reuse),
   served by the reference server's `GET /_osproxy/metrics`.
+- `TenantMetrics`: opt-in, bounded per-tenant request/failure/latency
+  counters (Caffeine-backed, TTL + hard-cap eviction so cardinality stays
+  bounded by live tenants, not all-time count). The one deliberate exception
+  to this module's shape-only rule; off by default.
 - `ExplainDoc` / `ExplainStore`: the shape-only causal trace captured per
   request, retrievable by request id via `GET /_osproxy/explain/{id}`.
 - `BreakGlassBuffer`: a bounded ring buffer of recent explain docs,
