@@ -30,6 +30,22 @@ public interface TenancySpi {
         return Optional.empty();
     }
 
+    /**
+     * A custom OpenSearch {@code routing} value for this partition, used
+     * only when {@link #docIdRule()} sets {@link DocIdRule#setRouting()}.
+     * Default: none, which keeps the existing behavior of routing on the
+     * partition id itself. Override this to route a shared index by
+     * something other than the partition (e.g. a shard key that spreads
+     * one large tenant's documents across shards instead of concentrating
+     * them under a single routing value, or a sub-tenant key that keeps
+     * finer-grained co-location than the partition alone would). The
+     * mandatory partition filter on read is unaffected either way, this
+     * only changes shard placement, never isolation.
+     */
+    default Optional<String> routingHint(PartitionId partition) {
+        return Optional.empty();
+    }
+
     /** Fields injected on ingest and stripped on read. Default: none. */
     default List<InjectedField> injectedFields() {
         return List.of();

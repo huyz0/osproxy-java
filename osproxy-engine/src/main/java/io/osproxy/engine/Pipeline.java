@@ -694,8 +694,18 @@ public final class Pipeline {
                 : logicalId;
     }
 
+    /**
+     * The OpenSearch {@code routing} value, when the placement's {@link
+     * DocIdRule} asks for one. Defaults to the partition id itself, but a
+     * {@code TenancySpi} can override this per partition (see {@link
+     * io.osproxy.spi.TenancySpi#routingHint}) to shard a large tenant's
+     * documents across shards, or co-locate at a finer grain than the
+     * partition alone.
+     */
     Optional<String> routing(Optional<DocIdRule> rule, RouteDecision decision) {
-        return rule.filter(DocIdRule::setRouting).map(r -> decision.partition().value());
+        return rule.filter(DocIdRule::setRouting)
+                .map(r -> router.spi().routingHint(decision.partition())
+                        .orElseGet(() -> decision.partition().value()));
     }
 
     /** An OpenSearch-shaped single-doc ack with logical labels. */

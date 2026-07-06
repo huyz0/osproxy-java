@@ -15,6 +15,7 @@ public interface TenancySpi {
     default List<InjectedField> injectedFields() { return List.of(); }
     default boolean admitWrite(PartitionId partition, Epoch epoch) { return true; }
     default Optional<String> clusterEndpoint(ClusterId cluster) { return Optional.empty(); }
+    default Optional<String> routingHint(PartitionId partition) { return Optional.empty(); }
 }
 ```
 
@@ -33,6 +34,19 @@ minimal implementation is a handful of lines.
 - **`injectedFields()` and the read-side filter are symmetric by
   construction.** You don't write the read filter yourself; the engine
   derives it from the same `InjectedField` list you declare for writes.
+
+### Custom shard routing (`routingHint`)
+
+When `docIdRule().setRouting()` is true, OpenSearch's `routing` parameter
+defaults to the partition id itself, the same value every physical id is
+already prefixed with. Override `routingHint(partition)` to route by
+something else instead, a sub-tenant key that keeps finer co-location than
+the partition alone, or a shard key that spreads one very large tenant's
+documents across shards rather than concentrating them under one routing
+value. Returning `Optional.empty()` for a partition keeps the existing
+partition-as-routing behavior; the physical-id namespace and the mandatory
+read-side partition filter are unaffected either way; `routingHint` only
+ever changes shard placement, never isolation.
 
 ### Partition key sources
 
