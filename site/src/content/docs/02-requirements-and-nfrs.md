@@ -6,9 +6,11 @@ page is the summary, not aspirational.
 
 ## Functional scope
 
-- **Ingress**: HTTP/1.1 on Helidon SE's virtual-thread server; cleartext and
-  TLS/mTLS. (No gRPC or HTTP/2 ingress, a difference from the Rust
-  `osproxy` sibling, which has both; see [Architecture](/osproxy-java/03-architecture/).)
+- **Ingress**: HTTP/1.1 and HTTP/2 (negotiated automatically, same port) on
+  Helidon SE's virtual-thread server; cleartext and TLS/mTLS. A gRPC
+  `DocumentService` (single-doc ingest) rides the same port too, mirroring the
+  Rust `osproxy` sibling's gRPC surface; see
+  [Architecture](/osproxy-java/03-architecture/).
 - **Single-target routing** for **all** request types (read and write).
 - **Ingest demux**: one mixed-partition `_bulk` body split into per-placement
   writes, response `items[]` re-interleaved in original order.

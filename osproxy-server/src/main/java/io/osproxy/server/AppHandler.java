@@ -123,18 +123,43 @@ public final class AppHandler {
 
     /** Binds the request's trace context and forwarded-header set, then handles. */
     private void handleTraced(ServerRequest req, ServerResponse res) {
-        io.osproxy.core.TraceContext trace = req.headers()
-                .first(HeaderNames.create("traceparent"))
+        List<Map.Entry<String, String>> rawHeaders = new ArrayList<>();
+        req.headers().forEach(h -> rawHeaders.add(Map.entry(h.name(), h.values())));
+        traced(rawHeaders, req.headers().first(HeaderNames.create("traceparent")),
+                () -> handle(req, res));
+    }
+
+    /**
+     * Binds trace context and the forwarded-header set from {@code
+     * rawHeaders}/{@code incomingTraceparent}, then runs {@code body}. Every
+     * ingress protocol needs this around its dispatch: {@link #dispatch}
+     * reads {@code Tracing.CURRENT} (via {@code recordCompletion}) and the
+     * sink reads both scoped values at its upstream choke point, so an
+     * ingress that skips this binding gets an unbound-{@code ScopedValue}
+     * failure the first time it calls {@link #dispatch}. REST goes through
+     * {@link #handleTraced} above; {@link GrpcDocumentService} calls this
+     * directly, since a gRPC RPC has no {@code ServerRequest} to read a
+     * {@code traceparent} header off.
+     */
+    <T> T traced(
+            List<Map.Entry<String, String>> rawHeaders, Optional<String> incomingTraceparent,
+            java.util.function.Supplier<T> body) {
+        io.osproxy.core.TraceContext trace = incomingTraceparent
                 .flatMap(io.osproxy.core.TraceContext::parse)
                 .map(incoming -> incoming.child(randomBytes(8)))
                 .orElseGet(() -> io.osproxy.core.TraceContext.mint(
                         randomBytes(16), randomBytes(8)));
-        List<Map.Entry<String, String>> rawHeaders = new ArrayList<>();
-        req.headers().forEach(h -> rawHeaders.add(Map.entry(h.name(), h.values())));
         List<Map.Entry<String, String>> forward = forwardPolicy.forwardSet(rawHeaders);
-        ScopedValue.where(io.osproxy.core.Tracing.CURRENT, trace)
+        return ScopedValue.where(io.osproxy.core.Tracing.CURRENT, trace)
                 .where(io.osproxy.core.ForwardHeaders.CURRENT, forward)
-                .run(() -> handle(req, res));
+                .call(() -> body.get());
+    }
+
+    private void traced(List<Map.Entry<String, String>> rawHeaders, Optional<String> incomingTraceparent, Runnable body) {
+        traced(rawHeaders, incomingTraceparent, () -> {
+            body.run();
+            return null;
+        });
     }
 
     private static byte[] randomBytes(int n) {
@@ -275,7 +300,7 @@ public final class AppHandler {
         }
         byte[] body;
         try {
-            body = req.content().hasEntity()
+            body = hasBody(req)
                     ? readCapped(req.content().inputStream())
                     : new byte[0];
         } catch (OverCapException e) {
@@ -295,9 +320,25 @@ public final class AppHandler {
                 headers, body, principal.get(),
                 req.query().rawValue());
 
+        Dispatched dispatched = dispatch(ctx);
+        res.header(HeaderNames.create(REQUEST_ID_HEADER), dispatched.requestId());
+        send(res, dispatched.response());
+    }
+
+    /** What {@link #dispatch} produced: the pipeline's response and the request id it was recorded under. */
+    public record Dispatched(PipelineResponse response, String requestId) {}
+
+    /**
+     * The transport-agnostic core every ingress protocol shares once it has
+     * built a {@link RequestCtx}: run the pipeline, record the completion
+     * (explain doc, metrics), and capture, in that order. REST's buffered
+     * path above is one caller; {@link GrpcDocumentService} is another,
+     * since a gRPC RPC has no {@code ServerResponse} to hang a header off.
+     */
+    public Dispatched dispatch(RequestCtx ctx) {
         long started = System.nanoTime();
         PipelineResponse out = pipeline.handle(ctx);
-        record(ctx, res, out, System.nanoTime() - started);
+        String requestId = recordCompletion(ctx, out, System.nanoTime() - started);
         // Credentials never reach a capture backend, whatever the sink is:
         // redaction happens here at the choke point, not by caller discipline.
         // safe(...) wraps redacting(c) itself (not just c) so a failure in
@@ -305,9 +346,9 @@ public final class AppHandler {
         // safe-wrapped, but that only guards the delegate, not this mapping.
         capture.ifPresent(c -> io.osproxy.capture.Capture.safe(io.osproxy.capture.Capture.redacting(c))
                 .capture(new io.osproxy.capture.Capture.Record(
-                        ctx.method().name(), path, headers, body,
+                        ctx.method().name(), ctx.path(), ctx.headers(), ctx.body(),
                         out.status(), out.body())));
-        send(res, out);
+        return new Dispatched(out, requestId);
     }
 
     /**
@@ -331,7 +372,7 @@ public final class AppHandler {
         // recorded under the status the client actually saw, not silently
         // dropped from observability.
         int[] committedStatus = {-1};
-        try (java.io.InputStream reqBody = req.content().hasEntity()
+        try (java.io.InputStream reqBody = hasBody(req)
                 ? req.content().inputStream() : java.io.InputStream.nullInputStream()) {
             try (var streamed = pipeline.reader().forwardStreaming(
                     policy.target(), method, req.path().rawPath(), req.query().rawValue(),
@@ -385,7 +426,7 @@ public final class AppHandler {
                 classified.logicalIndex(), classified.docId(),
                 headers, new byte[0], principal, req.query().rawValue());
         long started = System.nanoTime();
-        try (java.io.InputStream in = req.content().hasEntity()
+        try (java.io.InputStream in = hasBody(req)
                 ? new CappingInputStream(req.content().inputStream(), maxBodyBytes)
                 : java.io.InputStream.nullInputStream()) {
             PipelineResponse out = pipeline.ingestDocStreaming(ctx, in);
@@ -434,7 +475,7 @@ public final class AppHandler {
                 headers, new byte[0], principal, req.query().rawValue());
         long started = System.nanoTime();
         boolean search = classified.endpoint() == io.osproxy.core.EndpointKind.SEARCH;
-        try (java.io.InputStream in = req.content().hasEntity()
+        try (java.io.InputStream in = hasBody(req)
                 ? new CappingInputStream(req.content().inputStream(), maxBodyBytes)
                 : java.io.InputStream.nullInputStream()) {
             PipelineResponse out = pipeline.searchStreaming(ctx, in, search);
@@ -510,7 +551,7 @@ public final class AppHandler {
                 method, req.path().rawPath(), classified.endpoint(),
                 classified.logicalIndex(), classified.docId(),
                 headers, new byte[0], principal, req.query().rawValue());
-        try (java.io.InputStream in = req.content().hasEntity()
+        try (java.io.InputStream in = hasBody(req)
                 ? req.content().inputStream() : java.io.InputStream.nullInputStream()) {
             Pipeline.BulkStream stream;
             try {
@@ -585,7 +626,7 @@ public final class AppHandler {
             send(res, PipelineResponse.error(ErrorCode.UNSUPPORTED_ENDPOINT));
             return;
         }
-        byte[] body = req.content().hasEntity() ? req.content().as(byte[].class) : new byte[0];
+        byte[] body = hasBody(req) ? req.content().as(byte[].class) : new byte[0];
         try {
             publishable.publish(api.decode(body));
             res.status(Status.OK_200)
@@ -594,6 +635,25 @@ public final class AppHandler {
         } catch (DirectivesApi.InvalidDirectives e) {
             send(res, PipelineResponse.error(ErrorCode.MALFORMED_REQUEST));
         }
+    }
+
+    /**
+     * Whether the request actually carries a body worth opening a stream
+     * for. {@code content().hasEntity()} alone isn't safe over HTTP/2: a
+     * request upgraded from HTTP/1.1 (h2c) with a declared {@code
+     * Content-Length: 0} still reports an entity present, and reading from
+     * it parks the handling virtual thread forever waiting on a DATA frame
+     * that was never going to arrive (confirmed via thread dump against
+     * Helidon 4.2.7: {@code Http2ServerStream.readEntityFromPipeline} blocks
+     * on an empty queue with no end-of-stream ever delivered for this
+     * upgraded-empty-body case). An explicit zero content-length overrides
+     * {@code hasEntity()} so no read site ever opens that stream.
+     */
+    private static boolean hasBody(ServerRequest req) {
+        return req.content().hasEntity()
+                && req.headers().first(HeaderNames.CONTENT_LENGTH)
+                        .map(v -> !v.equals("0"))
+                        .orElse(true);
     }
 
     private static final class OverCapException extends Exception {}
@@ -613,16 +673,20 @@ public final class AppHandler {
         return out.toByteArray();
     }
 
-    /** Tallies the completed request and echoes its id. */
-    private void record(
-            RequestCtx ctx, ServerResponse res, PipelineResponse out, long durationNanos) {
+    /** Tallies the completed request, echoes its id, for a streaming path that already has a {@code ServerResponse}. */
+    private void record(RequestCtx ctx, ServerResponse res, PipelineResponse out, long durationNanos) {
+        res.header(HeaderNames.create(REQUEST_ID_HEADER), recordCompletion(ctx, out, durationNanos));
+    }
+
+    /** Tallies the completed request and mints its request id. */
+    private String recordCompletion(RequestCtx ctx, PipelineResponse out, long durationNanos) {
         String requestId = java.util.HexFormat.of().formatHex(randomBytes(8));
-        res.header(HeaderNames.create(REQUEST_ID_HEADER), requestId);
         Optional<String> errorCode = out.status() >= 400
                 ? extractErrorCode(out.body())
                 : Optional.empty();
         recordCompletion(requestId, ctx.endpoint(), ctx.method().name(), ctx.logicalIndex(),
                 ctx.principal(), out.status(), errorCode, durationNanos);
+        return requestId;
     }
 
     /** Overload for a streaming path that never built a {@link Classify.Classified}-free doc. */

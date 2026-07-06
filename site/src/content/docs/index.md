@@ -37,7 +37,7 @@ flowchart LR
     c1[("Cluster A<br/>shared index")]
     c2[("Cluster B<br/>dedicated index")]
 
-    client -->|"HTTP/1.1 · TLS/mTLS"| proxy
+    client -->|"HTTP/1.1 · HTTP/2 · gRPC · TLS/mTLS"| proxy
     proxy -->|"partition → placement"| c1
     proxy -->|"partition → placement"| c2
 

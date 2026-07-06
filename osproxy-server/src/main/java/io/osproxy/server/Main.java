@@ -92,8 +92,9 @@ public final class Main {
         if (cfg.logDiagnosticCaptures()) {
             observability.withDiagnosticSink(new StdoutDiagnosticSink());
         }
+        BearerAuth auth = new BearerAuth(cfg.tokens());
         AppHandler handler = new AppHandler(
-                pipeline, new BearerAuth(cfg.tokens()),
+                pipeline, auth,
                 cfg.maxBodyBytes(), cfg.requireTlsForMutation(), observability)
                 .withDebugEndpoints(cfg.debugEndpoints())
                 .withForwardPolicy(new ForwardPolicy(
@@ -101,7 +102,12 @@ public final class Main {
         cfg.directiveAdminToken().ifPresent(handler::withAdminToken);
         var builder = WebServer.builder()
                 .port(cfg.port())
-                .routing(handler::route);
+                .routing(handler::route)
+                // gRPC ingress: same port/TLS as REST, HTTP/2's own protocol
+                // handler distinguishes a gRPC call by its content-type.
+                .addRouting(io.helidon.webserver.grpc.GrpcRouting.builder()
+                        .intercept(new GrpcMetadataInterceptor())
+                        .service(new GrpcDocumentService(handler, auth).descriptor()));
         cfg.tls().ifPresent(tls -> builder.tls(tls(tls)));
         return builder.build().start();
     }

@@ -2,7 +2,11 @@
 # workspace's `[workspace.dependencies]`. Versions are pinned exactly so a
 # build is reproducible and an upgrade is a deliberate diff.
 [versions]
-helidon = "4.2.2"
+# 4.2.7, not 4.2.2: helidon-webserver-grpc 4.2.2's GrpcHeadersUtil.toMetadata
+# put each header's own name in as its value (verified by bytecode
+# inspection), corrupting every incoming gRPC metadata value including
+# Authorization; fixed by 4.2.7 in the same 4.2.x line.
+helidon = "4.2.7"
 jackson = "2.19.0"
 junit = "5.12.2"
 jqwik = "1.9.3"
@@ -12,12 +16,24 @@ testcontainers = "1.21.3"
 awaitility = "4.3.0"
 bcfips = "2.1.0"
 kafka = "4.3.0"
+grpc = "1.65.1"
+protobuf = "3.25.1"
 
 [libraries]
 helidon-webserver = { module = "io.helidon.webserver:helidon-webserver", version.ref = "helidon" }
+helidon-webserver-http2 = { module = "io.helidon.webserver:helidon-webserver-http2", version.ref = "helidon" }
+helidon-webserver-grpc = { module = "io.helidon.webserver:helidon-webserver-grpc", version.ref = "helidon" }
 helidon-webclient = { module = "io.helidon.webclient:helidon-webclient", version.ref = "helidon" }
+helidon-webclient-http2 = { module = "io.helidon.webclient:helidon-webclient-http2", version.ref = "helidon" }
 helidon-config = { module = "io.helidon.config:helidon-config", version.ref = "helidon" }
 helidon-config-yaml = { module = "io.helidon.config:helidon-config-yaml", version.ref = "helidon" }
+grpc-stub = { module = "io.grpc:grpc-stub", version.ref = "grpc" }
+grpc-protobuf = { module = "io.grpc:grpc-protobuf", version.ref = "grpc" }
+grpc-netty-shaded = { module = "io.grpc:grpc-netty-shaded", version.ref = "grpc" }
+protobuf-java = { module = "com.google.protobuf:protobuf-java", version.ref = "protobuf" }
+# Generated grpc-java server stubs still target the pre-JDK9 javax.annotation.Generated,
+# removed from the JDK itself in Java 11; needed only at compile time for that annotation.
+javax-annotation-api = { module = "javax.annotation:javax.annotation-api", version = "1.3.2" }
 jackson-core = { module = "com.fasterxml.jackson.core:jackson-core", version.ref = "jackson" }
 jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }

@@ -134,12 +134,33 @@ control plane** at runtime instead, see
 [Configuration](/osproxy-java/07-configuration/) and
 [Observability & Control Plane](/osproxy-java/08-observability/).
 
+## Ingress protocols
+
+REST over HTTP/1.1 and HTTP/2 share one `HttpRouting`, one port, and one TLS
+configuration: adding `helidon-webserver-http2` to the classpath is enough for
+Helidon to negotiate HTTP/2 automatically, both `h2c` (cleartext, prior
+knowledge or an HTTP/1.1 upgrade) and `h2` (ALPN over TLS), alongside HTTP/1.1
+on the exact same listener. `AppHandler`'s routing is written once, against
+the protocol-agnostic `HttpRouting.Builder#any`, so nothing about the request
+pipeline changes across protocol versions.
+
+A gRPC `DocumentService` (one `Index` RPC, mirroring the Rust sibling's own
+gRPC surface) rides the same port on its own `GrpcRouting`, since gRPC is
+itself just another protocol layered on the same HTTP/2 connection. Every RPC
+is adapted into the same `RequestCtx` the REST path builds and driven through
+the identical `AppHandler#dispatch`, so tenancy, isolation, and observability
+are unchanged across protocols; only the wire envelope differs. Bearer-token
+auth reads the token off the gRPC call's `authorization` metadata the same
+way REST reads it off the `Authorization` header.
+
 ## What's different from the Rust `osproxy`
 
 This is a from-scratch port, not a line-for-line translation, and a few
 things differ by platform or by scope:
 
-- **Ingress**: HTTP/1.1 + TLS/mTLS only. No gRPC, no HTTP/2 ingress.
+- **gRPC listener**: shares the REST port and TLS configuration (see
+  [Ingress protocols](#ingress-protocols) above); the Rust sibling instead
+  binds gRPC on its own optional `grpc_bind` address.
 - **Authorization**: no separate post-authentication `Authorizer` seam yet.
   `BearerAuth` resolves a `Principal`, and that's the extent of the
   built-in auth model.

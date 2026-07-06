@@ -81,12 +81,40 @@ WebServer server = WebServer.builder()
 Pair this with `osproxy.require-tls-for-mutation=true` so a body-mutating
 request over a plaintext listener is refused rather than silently accepted.
 
+## HTTP/2 and gRPC
+
+HTTP/2 needs nothing beyond a dependency: add `helidon-webserver-http2` and
+the `WebServer` above negotiates it automatically, on the same port, next to
+HTTP/1.1. `AppHandler`'s routing already works unchanged across both.
+
+gRPC is an additional `GrpcRouting` on the same builder:
+
+```java
+WebServer server = WebServer.builder()
+        .port(9200)
+        .routing(handler::route)
+        .addRouting(GrpcRouting.builder()
+                .intercept(new GrpcMetadataInterceptor())
+                .service(new GrpcDocumentService(handler, auth).descriptor()))
+        .build()
+        .start();
+```
+
+`GrpcDocumentService` adapts the `DocumentService.Index` RPC into the same
+`RequestCtx`/`AppHandler#dispatch` the REST ingest path uses, so a gRPC
+caller gets the identical tenancy, auth, and observability behavior as a
+REST one. `GrpcMetadataInterceptor` stashes the call's metadata into a
+`Context` key so the handler can read the bearer token off it, the gRPC
+analog of `ServerRequest.headers()`.
+
 ## You usually don't write `main` at all
 
 `osproxy-server`'s `Main.start(ProxyConfig)` already assembles every layer
 above from a `ProxyConfig`, wiring capture, async fan-out, FIPS, OTLP,
-directive/placement polling, and the passthrough policy from config keys.
-Run the binary directly, or read `Main.java` as a worked example, then
-adapt it. It is deliberately one linear method, not a framework you extend.
+directive/placement polling, and the passthrough policy from config keys; the
+gRPC routing is always on, no config key gates it, since it shares the REST
+port and TLS setup rather than opening anything new. Run the binary
+directly, or read `Main.java` as a worked example, then adapt it. It is
+deliberately one linear method, not a framework you extend.
 
 → [Configuration](/osproxy-java/07-configuration/)
