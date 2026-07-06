@@ -33,27 +33,40 @@ streaming-twin pass, not yet done.
 ## Per-request added latency and throughput (e2e, real OpenSearch)
 
 Ingest workload, direct-to-cluster baseline vs. through the proxy, swept
-c=1/8/32/64 (300 ops/level in CI; 1600 ops/level when this table was
-measured, the numbers below predate a scale-down done to keep the
-Docker-backed integration suite fast). Streaming ingest is the default
-path for any tenancy where it's eligible
-(`Pipeline.supportsStreamingIngest`, true for the reference tenancy), so
-this reflects what actually runs. Measured 2026-07-05:
+c=1/8/32/64 (300 ops/level in CI). Streaming ingest is the default path
+for any tenancy where it's eligible (`Pipeline.supportsStreamingIngest`,
+true for the reference tenancy), so this reflects what actually runs.
 
-| Concurrency | Baseline ops/s | Proxied ops/s | Ratio | Added p50 | Added p99 |
-|---|---|---|---|---|---|
-| 1 | 89 | 91 | 1.02 | -0.06ms | -3.28ms |
-| 8 | 559 | 543 | 0.97 | +0.36ms | +0.03ms |
-| 32 | 2122 | 2074 | 0.98 | +0.61ms | -0.94ms |
-| 64 | 3936 | 3701 | 0.94 | +1.23ms | -0.43ms |
+A single run at this sample size is not enough to trust: baseline and
+proxied percentiles are independently sampled, so at low concurrency
+(where absolute latencies are small and dominated by host jitter) the
+apparent "added latency" can land negative purely from noise, not because
+the proxy is actually faster than talking to OpenSearch directly, that
+would be physically impossible for a request that goes through the proxy
+*and then* to OpenSearch. Five runs, measured 2026-07-06:
 
-Ratio holds in the 0.94–1.02 band across the whole concurrency sweep, with
-no downward trend as concurrency rises, the streaming transform (see
-[below](#streaming-transform-cost-jmh)) runs inline on the request's own
-virtual thread, so nothing here scales with thread count. One run, not a
-statistically rigorous sweep, reproduce before trusting the exact numbers.
+| Concurrency | Added p50 across 5 runs | Added p99 across 5 runs | Throughput ratio across 5 runs |
+|---|---|---|---|
+| 1 | -0.10 to +0.83ms (median +0.65ms) | -2.20 to +2.37ms (median -1.65ms) | 0.94-1.02 |
+| 8 | -4.43 to +0.94ms (median +0.01ms) | -16.26 to +8.92ms (median -0.79ms) | 0.83-1.22 |
+| 32 | +0.22 to +1.78ms (median +1.16ms) | +0.45 to +15.47ms (median +3.95ms) | 0.90-1.07 |
+| 64 | -0.80 to +3.27ms (median +1.88ms) | +6.17 to +12.36ms (median +8.59ms) | 0.77-0.94 |
 
-Reproduce: `./gradlew :osproxy-server:test -PincludeIntegration --tests PerfHarnessE2eTest`
+The honest signal in this data: at c=1 and c=8, added latency is small
+relative to measurement noise in both directions, not a reliable read
+either way at this sample size. At c=32 and c=64, added p99 came out
+**positive in every single one of the 5 runs**, a real, repeatable
+tail-latency cost from routing through the proxy, consistent with what
+should physically happen. Throughput ratio stays in a 0.77-1.22 band with
+no consistent downward trend as concurrency rises (the streaming
+transform, see [below](#streaming-transform-cost-jmh), runs inline on the
+request's own virtual thread, so nothing here scales with thread count),
+though the wide band itself says this harness isn't precise enough to
+report a single ratio number with confidence, only that the proxy doesn't
+collapse under concurrency.
+
+Reproduce: `./gradlew :osproxy-server:test -PincludeIntegration --tests PerfHarnessE2eTest`,
+several times, not once, before trusting any single number from it.
 
 ## Memory footprint under sustained load
 
