@@ -84,7 +84,7 @@ class ConcurrentLoadE2eTest {
     }
 
     @Test
-    void tenThousandConcurrentIngestsAllSucceedWithNoLeaksOrStalls() throws Exception {
+    void concurrentIngestsAllSucceedWithNoLeaksOrStalls() throws Exception {
         var client = HttpClient.newHttpClient();
         var failures = new AtomicInteger();
         List<Throwable> exceptions = Collections.synchronizedList(new ArrayList<>());
@@ -129,8 +129,8 @@ class ConcurrentLoadE2eTest {
         double seconds = (System.nanoTime() - started) / 1e9;
 
         System.out.printf(
-                "=== 10K concurrent ingest (mocked upstream): %.1fs, %.0f req/s, %d failures, %d exceptions ===%n",
-                seconds, REQUESTS / seconds, failures.get(), exceptions.size());
+                "=== %d concurrent ingest (mocked upstream): %.1fs, %.0f req/s, %d failures, %d exceptions ===%n",
+                REQUESTS, seconds, REQUESTS / seconds, failures.get(), exceptions.size());
         if (!exceptions.isEmpty()) {
             System.out.println("first exception:");
             exceptions.get(0).printStackTrace();

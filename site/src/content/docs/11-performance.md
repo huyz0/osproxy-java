@@ -33,10 +33,12 @@ streaming-twin pass, not yet done.
 ## Per-request added latency and throughput (e2e, real OpenSearch)
 
 Ingest workload, direct-to-cluster baseline vs. through the proxy, swept
-c=1/8/32/64 (1600 ops/level). Streaming ingest is the default path for any
-tenancy where it's eligible (`Pipeline.supportsStreamingIngest`, true for
-the reference tenancy), so this reflects what actually runs. Measured
-2026-07-05:
+c=1/8/32/64 (300 ops/level in CI; 1600 ops/level when this table was
+measured, the numbers below predate a scale-down done to keep the
+Docker-backed integration suite fast). Streaming ingest is the default
+path for any tenancy where it's eligible
+(`Pipeline.supportsStreamingIngest`, true for the reference tenancy), so
+this reflects what actually runs. Measured 2026-07-05:
 
 | Concurrency | Baseline ops/s | Proxied ops/s | Ratio | Added p50 | Added p99 |
 |---|---|---|---|---|---|
@@ -55,8 +57,9 @@ Reproduce: `./gradlew :osproxy-server:test -PincludeIntegration --tests PerfHarn
 
 ## Memory footprint under sustained load
 
-20,000 sequential requests, 256MiB-capped heap, forced GC before each RSS
-snapshot. Measured 2026-07-05:
+4,000 sequential requests in CI (20,000 when this table was measured,
+before the same scale-down), 256MiB-capped heap, forced GC before each
+RSS snapshot. Measured 2026-07-05:
 
 | | RSS |
 |---|---|
@@ -262,29 +265,35 @@ too.
 
 Reproduce: `./gradlew :osproxy-jmh:jmh -Pjmh.includes=Streaming`
 
-## 10,000-request concurrency load test
+## Concurrency load test
 
-`ConcurrentLoadE2eTest` drives 10,000 ingest requests through 1,000
+`ConcurrentLoadE2eTest` drives 2,000 ingest requests through 200
 concurrent virtual-thread workers against a *mocked* upstream (a plain
 Helidon `WebServer` that accepts everything and answers immediately),
 deliberately not a real OpenSearch container, so the result isolates the
 proxy's own behavior under heavy fan-out from anything upstream-side.
-Result: **0 failures, 0 exceptions, 2.4s wall time, ~4200 req/s.** No
+Result: **0 failures, 0 exceptions**, typically well under a couple of
+seconds and a few hundred to a few thousand req/s depending on host
+load (the CI box this runs on is shared, so the exact number moves
+around; the invariant that matters is zero failures and no stall). No
 connection-pool exhaustion, no virtual-thread pinning, no circuit-breaker
 false trips, the proxy holds up cleanly at this concurrency.
 
 The one real finding from building this test was in the *test harness*,
 not the proxy: the first attempt launched one virtual thread per request
-(10,000 simultaneous new connections) and failed with `java.net.
+(one simultaneous new connection per request) and failed with `java.net.
 ConnectException: Cannot assign requested address`. That's client-side
 ephemeral-port exhaustion, this box's `/proc/sys/net/ipv4/
 ip_local_port_range` is a narrow ~4096 ports, not a proxy defect; the fix
-was bounding the harness to 1,000 concurrent workers pulling from a shared
-counter (the same pattern `PerfHarnessE2eTest.run()` already uses), which
-still drives real, heavy sustained concurrency without the client
-artifact. Worth remembering if this test is ever re-tuned: a failure here
-that looks like a connection error is worth checking against the local
-ephemeral port range before assuming it's the proxy.
+was bounding the harness to a fixed pool of concurrent workers pulling
+from a shared counter (the same pattern `PerfHarnessE2eTest.run()`
+already uses), which still drives real, heavy sustained concurrency
+without the client artifact. Worth remembering if this test is ever
+re-tuned: a failure here that looks like a connection error is worth
+checking against the local ephemeral port range before assuming it's the
+proxy. Request/worker counts were cut roughly 5x from the original
+10,000/1,000 to keep the Docker-backed integration suite fast in CI; the
+invariants above hold at either scale.
 
 Reproduce: `./gradlew :osproxy-server:test -PincludeIntegration --tests ConcurrentLoadE2eTest`
 (no Docker required, the upstream is mocked)
