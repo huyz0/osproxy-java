@@ -34,6 +34,10 @@ the meaning of an existing positional call.
 | `osproxy.tokens.<token>` | *(none)* | Bearer token → tenant. Empty map means dev mode (`x-tenant` header trusted); never run that in production. |
 | `osproxy.require-tls-for-mutation` | `false` | Refuse body-mutating requests over cleartext (NFR-S1); requires `tls` to be configured. |
 | `osproxy.tls.cert-path` / `.key-path` / `.client-ca-path` | *(none)* | TLS listener; setting `client-ca-path` requires and verifies client certificates (mTLS). |
+| `osproxy.upstream-tls.ca-path` | *(none)* | Trust anchor for an `https://` `upstream`. Required to dial a TLS cluster; nothing is trusted implicitly (no platform trust store fallback). |
+| `osproxy.upstream-tls.cert-path` / `.key-path` | *(none)* | Client identity for mutual TLS to the upstream cluster; set both together, or neither. |
+
+Ingress TLS (`osproxy.tls.*`) and upstream TLS (`osproxy.upstream-tls.*`) are independent: a cleartext-in, TLS-out proxy (or the reverse) is a valid deployment.
 
 ### Observability & diagnostics
 

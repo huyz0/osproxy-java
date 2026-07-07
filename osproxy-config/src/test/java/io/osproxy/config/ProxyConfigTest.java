@@ -149,6 +149,52 @@ class ProxyConfigTest {
     }
 
     @Test
+    void upstreamTlsDefaultsToAbsent() {
+        var cfg = ProxyConfig.load(config(Map.of(
+                "osproxy.upstream", "http://localhost:9200",
+                "osproxy.index", "shared")));
+        assertThat(cfg.upstreamTls()).isEmpty();
+    }
+
+    @Test
+    void upstreamTlsCaAloneEnablesServerAuthOnly() {
+        var cfg = ProxyConfig.load(config(Map.of(
+                "osproxy.upstream", "https://localhost:9200",
+                "osproxy.index", "shared",
+                "osproxy.upstream-tls.ca-path", "/tmp/upstream-ca.pem")));
+        assertThat(cfg.upstreamTls()).isPresent();
+        assertThat(cfg.upstreamTls().get().caPath()).isEqualTo("/tmp/upstream-ca.pem");
+        assertThat(cfg.upstreamTls().get().certPath()).isEmpty();
+    }
+
+    @Test
+    void upstreamTlsMutualIdentityLoads() {
+        var cfg = ProxyConfig.load(config(Map.of(
+                "osproxy.upstream", "https://localhost:9200",
+                "osproxy.index", "shared",
+                "osproxy.upstream-tls.ca-path", "/tmp/upstream-ca.pem",
+                "osproxy.upstream-tls.cert-path", "/tmp/client-cert.pem",
+                "osproxy.upstream-tls.key-path", "/tmp/client-key.pem")));
+        assertThat(cfg.upstreamTls().get().certPath()).contains("/tmp/client-cert.pem");
+        assertThat(cfg.upstreamTls().get().keyPath()).contains("/tmp/client-key.pem");
+    }
+
+    @Test
+    void upstreamTlsCertRequiresItsKey() {
+        assertThatThrownBy(() -> new ProxyConfig.UpstreamTlsSettings(
+                        "/tmp/ca.pem", Optional.of("/tmp/cert.pem"), Optional.empty()))
+                .isInstanceOf(ProxyConfig.ConfigException.class)
+                .hasMessageContaining("cert-path and upstream-tls.key-path");
+    }
+
+    @Test
+    void upstreamTlsNeedsACaPath() {
+        assertThatThrownBy(() -> new ProxyConfig.UpstreamTlsSettings(
+                        "", Optional.empty(), Optional.empty()))
+                .isInstanceOf(ProxyConfig.ConfigException.class);
+    }
+
+    @Test
     void badBodyCapFailsFast() {
         assertThatThrownBy(() -> new ProxyConfig(
                         0, "http://x", "i", Map.of(), 0, false, java.util.Optional.empty()))

@@ -33,6 +33,7 @@ public final class Main {
         }
         ClusterId cluster = new ClusterId("primary");
         OpenSearchSink sink = new OpenSearchSink(Map.of(cluster, cfg.upstream()));
+        cfg.upstreamTls().ifPresent(settings -> sink.withUpstreamTls(upstreamTls(settings)));
         // Async write mode goes live only with a broker configured; the sink
         // adapter blocks on the acked produce (that is the 202 contract).
         var asyncSink = cfg.fanoutBootstrapServers()
@@ -144,6 +145,33 @@ public final class Main {
                         .build()
                         .certs())
                 .clientAuth(TlsClientAuth.REQUIRED));
+        return tls.build();
+    }
+
+    /**
+     * Builds the client-side {@code Tls} the sink uses to dial an
+     * {@code https://} upstream cluster: trusts {@code caPath} (required, no
+     * implicit platform trust store), and presents a client identity for
+     * mutual TLS to the upstream when {@code certPath}/{@code keyPath} are
+     * both set.
+     */
+    static Tls upstreamTls(io.osproxy.config.ProxyConfig.UpstreamTlsSettings settings) {
+        var tls = Tls.builder()
+                .trust(Keys.builder()
+                        .pem(pem -> pem.certificates(
+                                Resource.create(java.nio.file.Path.of(settings.caPath()))))
+                        .build()
+                        .certs());
+        if (settings.certPath().isPresent() && settings.keyPath().isPresent()) {
+            Keys identity = Keys.builder()
+                    .pem(pem -> pem
+                            .key(Resource.create(java.nio.file.Path.of(settings.keyPath().get())))
+                            .certChain(Resource.create(
+                                    java.nio.file.Path.of(settings.certPath().get()))))
+                    .build();
+            tls.privateKey(identity.privateKey().orElseThrow())
+                    .privateKeyCertChain(identity.certChain());
+        }
         return tls.build();
     }
 }

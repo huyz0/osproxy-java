@@ -84,6 +84,10 @@ import java.util.Optional;
  * @param tenantMetricsExportIntervalSeconds how often a live tenant-metrics
  *     snapshot is pushed to {@code otlpEndpoint} as OTLP metrics, when both
  *     {@code tenantMetricsEnabled} and {@code otlpEndpoint} are set
+ * @param upstreamTls TLS-to-upstream trust/identity, when the upstream
+ *     cluster terminates {@code https://}; absent means the sink trusts
+ *     nothing beyond what an {@code http://} upstream needs (no implicit
+ *     platform trust store, unlike a JDK client's default for public CAs)
  */
 public record ProxyConfig(
         int port,
@@ -117,13 +121,33 @@ public record ProxyConfig(
         Optional<String> adminEndpoint,
         List<String> adminAllowedPrefixes,
         boolean tenantMetricsEnabled,
-        int tenantMetricsExportIntervalSeconds) {
+        int tenantMetricsExportIntervalSeconds,
+        Optional<UpstreamTlsSettings> upstreamTls) {
 
     /** PEM paths for the TLS listener; {@code clientCaPath} enables mTLS. */
     public record TlsSettings(String certPath, String keyPath, Optional<String> clientCaPath) {
         public TlsSettings {
             if (certPath == null || certPath.isEmpty() || keyPath == null || keyPath.isEmpty()) {
                 throw new ConfigException("tls needs both cert-path and key-path");
+            }
+        }
+    }
+
+    /**
+     * PEM paths for TLS to the upstream cluster. {@code caPath} is required
+     * (rustls/Helidon trust nothing implicitly for a cluster the proxy
+     * dials); {@code certPath}/{@code keyPath} together enable mutual TLS to
+     * the upstream, absent means server-auth only.
+     */
+    public record UpstreamTlsSettings(
+            String caPath, Optional<String> certPath, Optional<String> keyPath) {
+        public UpstreamTlsSettings {
+            if (caPath == null || caPath.isEmpty()) {
+                throw new ConfigException("upstream-tls needs ca-path (trusts nothing implicitly)");
+            }
+            if (certPath.isPresent() != keyPath.isPresent()) {
+                throw new ConfigException(
+                        "set both upstream-tls.cert-path and upstream-tls.key-path, or neither");
             }
         }
     }
@@ -238,7 +262,8 @@ public record ProxyConfig(
                 directivesUrl, directivesPollSeconds, fanoutBootstrapServers, fanoutTopic,
                 placementsUrl, placementsPollSeconds, debugEndpoints, logDiagnosticCaptures,
                 Optional.empty(), Optional.empty(), List.of(), true, List.of(),
-                false, Optional.empty(), Optional.empty(), List.of(), false, 15);
+                false, Optional.empty(), Optional.empty(), List.of(), false, 15,
+                Optional.empty());
     }
 
     /** The default request-body cap (32 MiB), matching the Rust proxy. */
@@ -288,6 +313,7 @@ public record ProxyConfig(
         private List<String> adminAllowedPrefixes = List.of();
         private boolean tenantMetricsEnabled;
         private int tenantMetricsExportIntervalSeconds = 15;
+        private Optional<UpstreamTlsSettings> upstreamTls = Optional.empty();
 
         private Builder(int port, String upstream, String index) {
             this.port = port;
@@ -432,6 +458,11 @@ public record ProxyConfig(
             return this;
         }
 
+        public Builder upstreamTls(UpstreamTlsSettings upstreamTls) {
+            this.upstreamTls = Optional.of(upstreamTls);
+            return this;
+        }
+
         public ProxyConfig build() {
             return new ProxyConfig(
                     port, upstream, index, tokens,
@@ -442,7 +473,7 @@ public record ProxyConfig(
                     passthroughCluster, passthroughEndpoint, passthroughIndices,
                     headerForwardingEnabled, headerForwardingDeny,
                     deleteByQueryExpansion, adminCluster, adminEndpoint, adminAllowedPrefixes,
-                    tenantMetricsEnabled, tenantMetricsExportIntervalSeconds);
+                    tenantMetricsEnabled, tenantMetricsExportIntervalSeconds, upstreamTls);
         }
     }
 
@@ -536,7 +567,10 @@ public record ProxyConfig(
             Map.entry("OSPROXY_TENANT_METRICS_ENABLED", "tenant-metrics-enabled"),
             Map.entry(
                     "OSPROXY_TENANT_METRICS_EXPORT_INTERVAL_SECONDS",
-                    "tenant-metrics-export-interval-seconds"));
+                    "tenant-metrics-export-interval-seconds"),
+            Map.entry("OSPROXY_UPSTREAM_TLS_CA_PATH", "upstream-tls.ca-path"),
+            Map.entry("OSPROXY_UPSTREAM_TLS_CERT_PATH", "upstream-tls.cert-path"),
+            Map.entry("OSPROXY_UPSTREAM_TLS_KEY_PATH", "upstream-tls.key-path"));
 
     /**
      * The config the reference server boots from: {@link #ENV_ALIASES}'
@@ -580,6 +614,12 @@ public record ProxyConfig(
                                 .orElseThrow(() -> new ConfigException(
                                         "osproxy.tls.key-path is required with cert-path")),
                         root.get("tls.client-ca-path").asString().asOptional()));
+        Optional<UpstreamTlsSettings> upstreamTls = root.get("upstream-tls.ca-path")
+                .asString().asOptional()
+                .map(ca -> new UpstreamTlsSettings(
+                        ca,
+                        root.get("upstream-tls.cert-path").asString().asOptional(),
+                        root.get("upstream-tls.key-path").asString().asOptional()));
         return new ProxyConfig(
                 root.get("port").asInt().orElse(9200),
                 root.get("upstream").asString()
@@ -614,7 +654,8 @@ public record ProxyConfig(
                 root.get("admin-endpoint").asString().asOptional(),
                 csv(root.get("admin-allowed-prefixes").asString().asOptional()),
                 root.get("tenant-metrics-enabled").asBoolean().orElse(false),
-                root.get("tenant-metrics-export-interval-seconds").asInt().orElse(15));
+                root.get("tenant-metrics-export-interval-seconds").asInt().orElse(15),
+                upstreamTls);
     }
 
     /** A comma-separated list value, trimmed and empties dropped ({@code []} when unset). */

@@ -1,5 +1,6 @@
 package io.osproxy.sink;
 
+import io.helidon.common.tls.Tls;
 import io.helidon.webclient.api.HttpClientResponse;
 import io.helidon.webclient.api.WebClient;
 import io.osproxy.core.Clock;
@@ -34,6 +35,7 @@ public final class OpenSearchSink implements Sink, Reader {
     private final Map<String, CircuitBreaker> breakers = new ConcurrentHashMap<>();
     private final Map<ClusterId, String> endpoints;
     private final Resilience resilience;
+    private Optional<Tls> upstreamTls = Optional.empty();
 
     /** @param endpoints cluster id → base URL (e.g. {@code http://localhost:9200}) */
     public OpenSearchSink(Map<ClusterId, String> endpoints) {
@@ -43,6 +45,16 @@ public final class OpenSearchSink implements Sink, Reader {
     public OpenSearchSink(Map<ClusterId, String> endpoints, Resilience resilience) {
         this.endpoints = Map.copyOf(endpoints);
         this.resilience = resilience;
+    }
+
+    /**
+     * Configures TLS for {@code https://} cluster endpoints. Applies to every
+     * client this sink builds from here on; {@code Tls} carries the trusted
+     * CA (and, for mutual TLS to the upstream, this proxy's own identity).
+     */
+    public OpenSearchSink withUpstreamTls(Tls tls) {
+        this.upstreamTls = Optional.of(tls);
+        return this;
     }
 
     private String base(Target target) throws SinkException {
@@ -64,10 +76,23 @@ public final class OpenSearchSink implements Sink, Reader {
             throw new SinkException(
                     ErrorCode.UPSTREAM_UNAVAILABLE, "circuit open for " + target.cluster().value());
         }
-        return clients.computeIfAbsent(base, b -> WebClient.builder()
-                .baseUri(b)
-                .readTimeout(java.time.Duration.ofMillis(resilience.timeoutMillis()))
-                .build());
+        // Fail closed rather than silently falling back to the JDK's
+        // platform trust store: an https:// cluster with no upstreamTls
+        // configured means the operator hasn't decided what to trust yet.
+        if (base.startsWith("https://") && upstreamTls.isEmpty()) {
+            throw new SinkException(
+                    ErrorCode.PLACEMENT_BACKEND_UNAVAILABLE,
+                    "https upstream endpoint but no upstream TLS configured: " + base);
+        }
+        return clients.computeIfAbsent(base, b -> {
+            var builder = WebClient.builder()
+                    .baseUri(b)
+                    .readTimeout(java.time.Duration.ofMillis(resilience.timeoutMillis()));
+            if (b.startsWith("https://")) {
+                builder.tls(upstreamTls.orElseThrow());
+            }
+            return builder.build();
+        });
     }
 
     /** The breaker for a target (reporting outcomes / diagnostics). */
