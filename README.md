@@ -78,46 +78,11 @@ implementation("io.github.huyz0:osproxy-config:1.0.0")
 
 ## Releasing
 
-Publishing goes through the [Central Portal](https://central.sonatype.com/)
-via the `com.vanniktech.maven.publish` plugin (`osproxy.publish-conventions`,
-applied to every library module), driven by `.github/workflows/release.yml`
-on a pushed tag — never run locally. One-time setup:
-
-1. Create a Central Portal account and verify the `io.github.huyz0` namespace
-   (Account → Namespaces → verify via GitHub OAuth — no domain needed).
-2. Generate a user token (Account → Generate User Token).
-3. Generate a GPG key (`gpg --quick-generate-key`) dedicated to signing
-   releases, and publish it to a keyserver
-   (`gpg --keyserver keyserver.ubuntu.com --send-keys <fingerprint>`);
-   Central Portal verifies signatures against public keyservers.
-4. Add four **repository secrets** (Settings → Secrets and variables →
-   Actions) — never commit these:
-
-   | Secret | Value |
-   | --- | --- |
-   | `MAVEN_CENTRAL_USERNAME` | the user token's username half |
-   | `MAVEN_CENTRAL_PASSWORD` | the user token's password half |
-   | `GPG_SIGNING_KEY` | `gpg --export-secret-keys --armor <fingerprint>` output, in full |
-   | `GPG_SIGNING_KEY_PASSWORD` | the key's passphrase |
-
-To cut a release: bump `version` in
+Releases are automated by `.github/workflows/release.yml`: bump `version` in
 `build-logic/src/main/kotlin/osproxy.java-conventions.gradle.kts`, commit,
-then tag and push:
-
-```sh
-git tag v1.0.0 && git push origin v1.0.0
-```
-
-The `guard` job fails the run if the tag doesn't match the workspace version
-(so a mistagged push can never publish under the wrong coordinate); the
-`maven-central` job then runs `./gradlew publishToMavenCentral`, which stages
-and auto-releases every library module in one deployment (Central Portal
-validates checksums, signatures, and POM completeness before it goes live —
-no separate close/release step like the old OSSRH staging flow).
-
-For a local dry run against a throwaway key first (no Central Portal
-credentials involved), `./gradlew publishToMavenLocal` exercises the same
-jar/sources/javadoc/POM/signing pipeline against `~/.m2/repository`.
+then tag and push (e.g. `git tag v1.0.0 && git push origin v1.0.0`). The
+workflow publishes every library module to Maven Central via the Central
+Portal — never run locally.
 
 ## Development
 
