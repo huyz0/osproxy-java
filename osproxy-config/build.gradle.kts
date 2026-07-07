@@ -2,7 +2,10 @@
 // OSPROXY_* env overrides, validate fast-fail. No business logic.
 plugins {
     id("osproxy.java-conventions")
+    id("osproxy.publish-conventions")
 }
+
+description = "Typed configuration loading and validation for osproxy-java."
 
 dependencies {
     api(project(":osproxy-core"))

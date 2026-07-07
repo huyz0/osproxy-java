@@ -3,7 +3,10 @@
 // depends upward on it, and it never fails a request.
 plugins {
     id("osproxy.java-conventions")
+    id("osproxy.publish-conventions")
 }
+
+description = "OTLP/HTTP JSON span and metrics export for osproxy-java."
 
 dependencies {
     api(project(":osproxy-observe"))

@@ -6,7 +6,10 @@
 // javadoc), which is why this module also needs Caffeine.
 plugins {
     id("osproxy.java-conventions")
+    id("osproxy.publish-conventions")
 }
+
+description = "Shape-only observability for osproxy-java: request metrics, explain store, structured logs."
 
 dependencies {
     api(project(":osproxy-core"))

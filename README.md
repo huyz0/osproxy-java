@@ -65,6 +65,54 @@ sibling project). Start at [`site/src/content/docs/index.md`](site/src/content/d
 if you're reading it as plain markdown, or run the site locally for
 navigation and diagrams.
 
+## Installing
+
+Every module except `osproxy-server` (the reference binary) and `osproxy-jmh`
+(benchmarks) publishes to Maven Central under `io.github.huyz0`:
+
+```kotlin
+implementation("io.github.huyz0:osproxy-engine:1.0.0")
+implementation("io.github.huyz0:osproxy-config:1.0.0")
+// + osproxy-kafka / osproxy-otlp if you use async fan-out or tracing
+```
+
+## Releasing
+
+Publishing goes through the [Central Portal](https://central.sonatype.com/)
+via the `com.vanniktech.maven.publish` plugin (`osproxy.publish-conventions`,
+applied to every library module). One-time setup:
+
+1. Create a Central Portal account and verify the `io.github.huyz0` namespace
+   (Account → Namespaces → verify via GitHub OAuth — no domain needed).
+2. Generate a user token (Account → Generate User Token) for
+   `mavenCentralUsername` / `mavenCentralPassword`.
+3. Generate a GPG key (`gpg --quick-generate-key`) and publish it to a
+   keyserver (`gpg --keyserver keyserver.ubuntu.com --send-keys <fingerprint>`);
+   Central Portal verifies signatures against public keyservers.
+
+Set these in `~/.gradle/gradle.properties` (never in the repo):
+
+```properties
+mavenCentralUsername=<user token username>
+mavenCentralPassword=<user token password>
+signingInMemoryKey=<armored private key, or use signing.secretKeyRingFile instead>
+signingInMemoryKeyPassword=<key passphrase>
+```
+
+Then bump `version` in
+`build-logic/src/main/kotlin/osproxy.java-conventions.gradle.kts`, tag the
+release, and run:
+
+```sh
+./gradlew publishToMavenCentral --no-configuration-cache
+```
+
+This stages and auto-releases every library module in one deployment (Central
+Portal validates checksums, signatures, and POM completeness before it goes
+live; there's no separate "close/release" step like the old OSSRH staging
+flow). `publishToMavenLocal` (no credentials needed) is useful for a dry run
+against a local repo first.
+
 ## Development
 
 Docker engine 29+ note: docker-java's default API version (1.32) is below the

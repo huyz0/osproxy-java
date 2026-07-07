@@ -3,7 +3,10 @@
 // is testable with a MemorySink and an injected TenancySpi.
 plugins {
     id("osproxy.java-conventions")
+    id("osproxy.publish-conventions")
 }
+
+description = "osproxy-java's pipeline orchestration: classify, resolve, rewrite, dispatch, shape."
 
 dependencies {
     api(project(":osproxy-core"))

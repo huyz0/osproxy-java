@@ -3,7 +3,10 @@
 // deployment that never uses async writes carries no Kafka code path.
 plugins {
     id("osproxy.java-conventions")
+    id("osproxy.publish-conventions")
 }
+
+description = "The Kafka AckProducer implementation for osproxy-java's async write fan-out."
 
 dependencies {
     api(project(":osproxy-capture"))

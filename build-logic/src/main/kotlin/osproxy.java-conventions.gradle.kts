@@ -7,8 +7,12 @@ plugins {
     jacoco
 }
 
-group = "io.osproxy"
-version = "0.1.0"
+// The Maven coordinate group. Distinct from the `io.osproxy.*` Java package
+// namespace (unchanged, an internal detail) — this is the Central Portal
+// namespace, verified via GitHub OAuth against the `huyz0` account, so it
+// must be `io.github.huyz0` rather than the unverifiable `io.osproxy`.
+group = "io.github.huyz0"
+version = "1.0.0"
 
 java {
     toolchain {

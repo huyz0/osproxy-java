@@ -3,7 +3,10 @@
 // isolation checks.
 plugins {
     id("osproxy.java-conventions")
+    id("osproxy.publish-conventions")
 }
+
+description = "Adapts a user's TenancySpi into osproxy-java's routing decision (router, placement table)."
 
 dependencies {
     api(project(":osproxy-core"))

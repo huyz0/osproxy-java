@@ -4,7 +4,10 @@
 // artifact.
 plugins {
     id("osproxy.java-conventions")
+    id("osproxy.publish-conventions")
 }
+
+description = "Traffic capture and queue-producer seams for osproxy-java."
 
 dependencies {
     api(project(":osproxy-core"))

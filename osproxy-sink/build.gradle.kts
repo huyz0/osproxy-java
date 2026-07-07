@@ -2,7 +2,10 @@
 // vocabulary, MemorySink for tests, OpenSearchSink over Helidon WebClient.
 plugins {
     id("osproxy.java-conventions")
+    id("osproxy.publish-conventions")
 }
+
+description = "The write/read destination seam: Sink + Reader interfaces, OpenSearchSink, MemorySink."
 
 dependencies {
     api(project(":osproxy-core"))

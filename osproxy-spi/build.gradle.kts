@@ -4,7 +4,10 @@
 // on osproxy-core + serde_json.
 plugins {
     id("osproxy.java-conventions")
+    id("osproxy.publish-conventions")
 }
+
+description = "The public SPI a user implements: TenancySpi/RoutingSpi, RequestCtx, Placement."
 
 dependencies {
     api(project(":osproxy-core"))
