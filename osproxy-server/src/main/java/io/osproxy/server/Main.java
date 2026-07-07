@@ -4,7 +4,6 @@ import io.helidon.common.configurable.Resource;
 import io.helidon.common.pki.Keys;
 import io.helidon.common.tls.Tls;
 import io.helidon.common.tls.TlsClientAuth;
-import io.helidon.config.Config;
 import io.helidon.webserver.WebServer;
 import io.osproxy.config.ProxyConfig;
 import io.osproxy.core.ClusterId;
@@ -20,7 +19,7 @@ public final class Main {
     private Main() {}
 
     public static void main(String[] args) {
-        ProxyConfig cfg = ProxyConfig.load(Config.create());
+        ProxyConfig cfg = ProxyConfig.load(ProxyConfig.createConfig());
         WebServer server = start(cfg);
         System.out.println("osproxy-java listening on port " + server.port()
                 + (new BearerAuth(cfg.tokens()).devMode()

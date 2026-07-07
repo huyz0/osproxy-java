@@ -1,5 +1,8 @@
 # Reference configuration; every key is overridable via config sources
-# (e.g. environment). See osproxy-config's ProxyConfig.
+# (e.g. environment: OSPROXY_<NAME>, e.g. OSPROXY_TENANT_METRICS_ENABLED for
+# tenant-metrics-enabled below — see ProxyConfig.ENV_ALIASES for the full
+# list; Main boots via ProxyConfig.createConfig(), not Config.create()).
+# See osproxy-config's ProxyConfig.
 osproxy:
   port: 9201
   upstream: "http://localhost:9200"

@@ -325,4 +325,43 @@ class ProxyConfigTest {
         assertThat(cfg.adminAllowedPrefixes()).containsExactly("/_cat/");
         assertThat(cfg.adminEndpoint()).contains("http://ops:9200");
     }
+
+    // Helidon's own environment-variable ConfigSource requires a literal
+    // "_DASH_" token for every dash in a kebab-case key (e.g.
+    // OSPROXY_TENANT_DASH_METRICS_DASH_ENABLED) rather than a plain
+    // underscore — verified live against a real server boot where the
+    // intuitive OSPROXY_TENANT_METRICS_ENABLED silently no-op'd. createConfig
+    // exists so operators get the natural spelling instead; this guards
+    // every multi-word key (including dotted-nested ones) end to end.
+    @Test
+    void createConfigMapsPlainUnderscoreEnvVarsOntoKebabCaseKeys() {
+        var config = ProxyConfig.createConfig(Map.of(
+                "OSPROXY_UPSTREAM", "http://es:9200",
+                "OSPROXY_INDEX", "shared",
+                "OSPROXY_TENANT_METRICS_ENABLED", "true",
+                "OSPROXY_TENANT_METRICS_EXPORT_INTERVAL_SECONDS", "5",
+                "OSPROXY_FANOUT_BOOTSTRAP_SERVERS", "broker:9092",
+                "OSPROXY_HEADER_FORWARDING_ENABLED", "false",
+                "OSPROXY_TLS_CERT_PATH", "/tmp/cert.pem",
+                "OSPROXY_TLS_KEY_PATH", "/tmp/key.pem"));
+        var cfg = ProxyConfig.load(config);
+        assertThat(cfg.upstream()).isEqualTo("http://es:9200");
+        assertThat(cfg.tenantMetricsEnabled()).isTrue();
+        assertThat(cfg.tenantMetricsExportIntervalSeconds()).isEqualTo(5);
+        assertThat(cfg.fanoutBootstrapServers()).contains("broker:9092");
+        assertThat(cfg.headerForwardingEnabled()).isFalse();
+        assertThat(cfg.tls()).isPresent();
+        assertThat(cfg.tls().get().certPath()).isEqualTo("/tmp/cert.pem");
+    }
+
+    @Test
+    void createConfigIgnoresUnrecognizedEnvVars() {
+        var config = ProxyConfig.createConfig(Map.of(
+                "OSPROXY_UPSTREAM", "http://es:9200",
+                "OSPROXY_INDEX", "shared",
+                "PATH", "/usr/bin",
+                "SOME_UNRELATED_VAR", "x"));
+        var cfg = ProxyConfig.load(config);
+        assertThat(cfg.upstream()).isEqualTo("http://es:9200");
+    }
 }

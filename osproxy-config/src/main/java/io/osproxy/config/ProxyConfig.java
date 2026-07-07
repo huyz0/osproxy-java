@@ -1,6 +1,7 @@
 package io.osproxy.config;
 
 import io.helidon.config.Config;
+import io.helidon.config.ConfigSources;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -486,6 +487,82 @@ public record ProxyConfig(
         public ConfigException(String message) {
             super(message);
         }
+    }
+
+    /**
+     * Maps a plain-underscore {@code OSPROXY_*} environment variable name to
+     * its dotted/kebab-case config key. Needed because Helidon's own
+     * environment-variable {@code ConfigSource} requires a kebab-case key
+     * segment (e.g. {@code tenant-metrics-enabled}) to be spelled with a
+     * literal {@code _DASH_} token in the variable name (e.g. {@code
+     * OSPROXY_TENANT_DASH_METRICS_DASH_ENABLED} — see Helidon's {@code
+     * EnvironmentVariableAliases}), which is surprising, undocumented from an
+     * operator's point of view, and inconsistent with the plain-underscore
+     * convention the Rust sibling project's {@code OSPROXY_*} variables use.
+     * This table gives every multi-word key its natural spelling instead.
+     */
+    private static final Map<String, String> ENV_ALIASES = Map.<String, String>ofEntries(
+            Map.entry("OSPROXY_PORT", "port"),
+            Map.entry("OSPROXY_UPSTREAM", "upstream"),
+            Map.entry("OSPROXY_INDEX", "index"),
+            Map.entry("OSPROXY_MAX_BODY_BYTES", "max-body-bytes"),
+            Map.entry("OSPROXY_REQUIRE_TLS_FOR_MUTATION", "require-tls-for-mutation"),
+            Map.entry("OSPROXY_TLS_CERT_PATH", "tls.cert-path"),
+            Map.entry("OSPROXY_TLS_KEY_PATH", "tls.key-path"),
+            Map.entry("OSPROXY_TLS_CLIENT_CA_PATH", "tls.client-ca-path"),
+            Map.entry("OSPROXY_CURSOR_AFFINITY_KEY", "cursor-affinity-key"),
+            Map.entry("OSPROXY_LOG_REQUESTS", "log-requests"),
+            Map.entry("OSPROXY_DIRECTIVE_ADMIN_TOKEN", "directive-admin-token"),
+            Map.entry("OSPROXY_FIPS", "fips"),
+            Map.entry("OSPROXY_OTLP_ENDPOINT", "otlp-endpoint"),
+            Map.entry("OSPROXY_SERVICE_NAME", "service-name"),
+            Map.entry("OSPROXY_DIRECTIVES_URL", "directives-url"),
+            Map.entry("OSPROXY_DIRECTIVES_POLL_SECONDS", "directives-poll-seconds"),
+            Map.entry("OSPROXY_FANOUT_BOOTSTRAP_SERVERS", "fanout.bootstrap-servers"),
+            Map.entry("OSPROXY_FANOUT_TOPIC", "fanout.topic"),
+            Map.entry("OSPROXY_PLACEMENTS_URL", "placements-url"),
+            Map.entry("OSPROXY_PLACEMENTS_POLL_SECONDS", "placements-poll-seconds"),
+            Map.entry("OSPROXY_DEBUG_ENDPOINTS", "debug-endpoints"),
+            Map.entry("OSPROXY_LOG_DIAGNOSTIC_CAPTURES", "log-diagnostic-captures"),
+            Map.entry("OSPROXY_PASSTHROUGH_CLUSTER", "passthrough-cluster"),
+            Map.entry("OSPROXY_PASSTHROUGH_ENDPOINT", "passthrough-endpoint"),
+            Map.entry("OSPROXY_PASSTHROUGH_INDICES", "passthrough-indices"),
+            Map.entry("OSPROXY_HEADER_FORWARDING_ENABLED", "header-forwarding.enabled"),
+            Map.entry("OSPROXY_HEADER_FORWARDING_DENY", "header-forwarding.deny"),
+            Map.entry("OSPROXY_DELETE_BY_QUERY_EXPANSION", "delete-by-query-expansion"),
+            Map.entry("OSPROXY_ADMIN_CLUSTER", "admin-cluster"),
+            Map.entry("OSPROXY_ADMIN_ENDPOINT", "admin-endpoint"),
+            Map.entry("OSPROXY_ADMIN_ALLOWED_PREFIXES", "admin-allowed-prefixes"),
+            Map.entry("OSPROXY_TENANT_METRICS_ENABLED", "tenant-metrics-enabled"),
+            Map.entry(
+                    "OSPROXY_TENANT_METRICS_EXPORT_INTERVAL_SECONDS",
+                    "tenant-metrics-export-interval-seconds"));
+
+    /**
+     * The config the reference server boots from: {@link #ENV_ALIASES}'
+     * plain-underscore {@code OSPROXY_*} variables, layered as the
+     * highest-priority source over the ordinary {@link Config#create()}
+     * merge (Helidon's own environment-variable source, system properties,
+     * then {@code application.yaml}). Use {@link #load(Config)} directly (as
+     * the tests do) to bypass this environment layer entirely.
+     */
+    public static Config createConfig() {
+        return createConfig(System.getenv());
+    }
+
+    /** {@link #createConfig()} over an explicit environment map (tests). */
+    static Config createConfig(Map<String, String> env) {
+        Map<String, String> overrides = new LinkedHashMap<>();
+        env.forEach((name, value) -> {
+            String key = ENV_ALIASES.get(name);
+            if (key != null) {
+                overrides.put("osproxy." + key, value);
+            }
+        });
+        return Config.builder()
+                .addSource(ConfigSources.create(overrides))
+                .addSource(ConfigSources.create(Config.create()))
+                .build();
     }
 
     /**
