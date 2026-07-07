@@ -48,9 +48,9 @@ class PerfHarnessE2eTest {
 
     @BeforeAll
     static void start() {
-        opensearch = new GenericContainer<>("opensearchproject/opensearch:2.11.0")
+        opensearch = new GenericContainer<>("opensearchproject/opensearch:3.7.0")
                 .withEnv("discovery.type", "single-node")
-                .withEnv("plugins.security.disabled", "true")
+                .withEnv("DISABLE_SECURITY_PLUGIN", "true")
                 .withEnv("OPENSEARCH_JAVA_OPTS", "-Xms512m -Xmx512m")
                 .withExposedPorts(9200)
                 .waitingFor(Wait.forHttp("/").forPort(9200))
