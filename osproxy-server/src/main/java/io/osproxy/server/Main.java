@@ -144,7 +144,12 @@ public final class Main {
                                 Resource.create(java.nio.file.Path.of(ca))))
                         .build()
                         .certs())
-                .clientAuth(TlsClientAuth.REQUIRED));
+                .clientAuth(TlsClientAuth.REQUIRED)
+                // Endpoint identification (hostname verification) is a
+                // client-side concept; the JDK's SSLEngine fails the
+                // handshake outright if asked to apply it on the server role
+                // while validating an incoming client certificate.
+                .endpointIdentificationAlgorithm("NONE"));
         return tls.build();
     }
 
