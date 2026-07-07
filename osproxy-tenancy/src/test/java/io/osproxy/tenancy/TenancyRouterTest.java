@@ -105,6 +105,31 @@ class TenancyRouterTest {
     }
 
     @Test
+    void upstreamCredentialsFromTheSpiReachTheTarget() throws Exception {
+        var placement = new Placement.DedicatedIndex(new ClusterId("c1"), new IndexName("acme-idx"));
+        var creds = io.osproxy.core.UpstreamCredentials.bearer("service-token");
+        var spi = new TenancySpi() {
+            @Override
+            public PartitionKeySpec partitionKeySpec() {
+                return new PartitionKeySpec.Header("x-tenant");
+            }
+
+            @Override
+            public PlacementAt placementFor(PartitionId partition) {
+                return new PlacementAt(placement, new Epoch(2));
+            }
+
+            @Override
+            public Optional<io.osproxy.core.UpstreamCredentials> upstreamCredentials(
+                    ClusterId cluster) {
+                return cluster.value().equals("c1") ? Optional.of(creds) : Optional.empty();
+            }
+        };
+        RouteDecision d = new TenancyRouter(spi).route(ctx("orders"), null);
+        assertThat(d.target().credentials()).contains(creds);
+    }
+
+    @Test
     void dedicatedIndexUsesThePlacementIndexNoTransform() throws Exception {
         var placement = new Placement.DedicatedIndex(new ClusterId("c1"), new IndexName("acme-idx"));
         var router = new TenancyRouter(spi(placement, Optional.empty()));

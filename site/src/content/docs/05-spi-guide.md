@@ -92,6 +92,54 @@ Most sinks (including `OpenSearchSink`) are handed a static
 dynamically (the polling placement store does this, see
 [Configuration](/osproxy-java/07-configuration/)).
 
+### Authenticating to the upstream
+
+`BearerAuth` (below) authenticates the *client* to the proxy. Whether the
+proxy then needs to authenticate itself to the upstream OpenSearch cluster is
+a separate question, with two independent answers depending on what's
+actually sitting in front of that cluster:
+
+**A compatible auth layer sits in front of OpenSearch** (an auth-aware
+sidecar or gateway that validates the same token the client already
+presented to the proxy): pass the client's own header straight through. This
+needs no SPI code — `ForwardHeaders`/`ForwardPolicy` already do it, since
+`Authorization` is not on the mandatory strip list. Sound only when that
+upstream layer can independently validate the header; it is not a substitute
+for tenant isolation on a shared index, which still comes from the proxy's
+own injected-field mechanism regardless of who's authenticating the
+connection.
+
+**Nothing upstream understands the client's token** (a plain OpenSearch
+security plugin with its own users/roles, or a `DedicatedCluster` placement
+where different clusters need different credentials): the proxy needs its
+own identity, separate from the client's. A multi-tenant proxy funnels many
+tenants onto a shared placement, so it needs one identity with privileges
+spanning all of them, not each client's own scoped-down credential passed
+through. Override `upstreamCredentials`:
+
+```java
+class MyTenancy implements TenancySpi {
+    @Override
+    public Optional<UpstreamCredentials> upstreamCredentials(ClusterId cluster) {
+        return Optional.of(UpstreamCredentials.basic("proxy-service-account", secretFor(cluster)));
+    }
+}
+```
+
+Resolved fresh on every route (never cached), so a rotating credential (a
+refreshed access token, a short-lived STS-style secret) is naturally
+supported; your own lookup does whatever caching or refresh it needs.
+`UpstreamCredentials.basic`/`.bearer` cover the common schemes; the type is
+otherwise just a `(headerName, headerValue)` pair, since OpenSearch's
+security plugin (and anything else in front of it) is header-based
+regardless of scheme. When both this and a forwarded `Authorization` header
+are present, this one wins at the sink's upstream choke point — the proxy's
+deliberate identity for a cluster is never silently overridden by
+passthrough.
+
+Default: `Optional.empty()`, the sink sends no credential header unless the
+client's own forwarded headers supply one.
+
 ## `BearerAuth` (built-in)
 
 Unlike the Rust project's pluggable `Authenticator`/`Authorizer` traits,

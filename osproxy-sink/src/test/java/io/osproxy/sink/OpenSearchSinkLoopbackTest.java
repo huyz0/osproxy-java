@@ -25,7 +25,8 @@ import org.junit.jupiter.api.Test;
  */
 class OpenSearchSinkLoopbackTest {
 
-    private record Seen(String method, String path, String body, String forwardedTestHeader) {}
+    private record Seen(
+            String method, String path, String body, String forwardedTestHeader, String authorization) {}
 
     private static final ConcurrentLinkedQueue<Seen> SEEN = new ConcurrentLinkedQueue<>();
     private static WebServer server;
@@ -57,7 +58,8 @@ class OpenSearchSinkLoopbackTest {
                     req.path().rawPath() + (query.isEmpty() ? "" : "?" + query),
                     req.content().hasEntity() ? req.content().as(String.class) : "",
                     req.headers().first(io.helidon.http.HeaderNames.create("x-forwarded-test"))
-                            .orElse("")));
+                            .orElse(""),
+                    req.headers().first(io.helidon.http.HeaderNames.AUTHORIZATION).orElse("")));
             res.status(200).send("{\"result\":\"ok\"}");
         });
     }
@@ -293,6 +295,39 @@ class OpenSearchSinkLoopbackTest {
         SEEN.clear();
         sink.get(target, "acme:1", Optional.empty());
         assertThat(SEEN.poll().forwardedTestHeader()).isEmpty();
+    }
+
+    @Test
+    void targetCredentialsReachTheUpstreamCallAsAnAuthorizationHeader() throws Exception {
+        Target withCreds = new Target(
+                new ClusterId("c1"), new IndexName("orders"), Optional.empty(),
+                Optional.of(io.osproxy.core.UpstreamCredentials.bearer("proxy-service-token")));
+        SEEN.clear();
+        sink.get(withCreds, "acme:1", Optional.empty());
+        assertThat(SEEN.poll().authorization()).isEqualTo("Bearer proxy-service-token");
+    }
+
+    @Test
+    void targetCredentialsOverrideAForwardedAuthorizationHeader() throws Exception {
+        // A client's own token forwarded via ForwardPolicy is passthrough auth
+        // (sound only when a compatible upstream auth layer validates it); an
+        // SPI-supplied credential is the proxy's own deliberate identity for
+        // that cluster, and must win when both are present (see traced()'s
+        // javadoc on ordering).
+        Target withCreds = new Target(
+                new ClusterId("c1"), new IndexName("orders"), Optional.empty(),
+                Optional.of(io.osproxy.core.UpstreamCredentials.basic("svc", "s3cret")));
+        List<Map.Entry<String, String>> forwarded =
+                List.of(Map.entry("Authorization", "Bearer client-token"));
+        ScopedValue.where(io.osproxy.core.ForwardHeaders.CURRENT, forwarded).run(() -> {
+            SEEN.clear();
+            try {
+                sink.get(withCreds, "acme:1", Optional.empty());
+            } catch (SinkException e) {
+                throw new RuntimeException(e);
+            }
+        });
+        assertThat(SEEN.poll().authorization()).startsWith("Basic ");
     }
 
     @Test

@@ -33,6 +33,7 @@ class TenancySpiDefaultsTest {
         assertThat(MINIMAL.injectedFields()).isEmpty();
         assertThat(MINIMAL.admitWrite(new PartitionId("acme"), Epoch.INITIAL)).isTrue();
         assertThat(MINIMAL.clusterEndpoint(new ClusterId("c1"))).isEmpty();
+        assertThat(MINIMAL.upstreamCredentials(new ClusterId("c1"))).isEmpty();
     }
 
     @Test

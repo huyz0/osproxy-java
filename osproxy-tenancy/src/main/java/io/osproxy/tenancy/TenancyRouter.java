@@ -68,7 +68,8 @@ public final class TenancyRouter {
                     .orElse(new IndexName("cursor"));
         };
         Target target = new Target(
-                placement.cluster(), physicalIndex, spi.clusterEndpoint(placement.cluster()));
+                placement.cluster(), physicalIndex, spi.clusterEndpoint(placement.cluster()),
+                spi.upstreamCredentials(placement.cluster()));
         return new RouteDecision(target, partition, transformFor(placement), at.epoch());
     }
 
@@ -80,7 +81,8 @@ public final class TenancyRouter {
         Target target = new Target(
                 placement.cluster(),
                 physicalIndex,
-                spi.clusterEndpoint(placement.cluster()));
+                spi.clusterEndpoint(placement.cluster()),
+                spi.upstreamCredentials(placement.cluster()));
         return new RouteDecision(target, partition, transformFor(placement), at.epoch());
     }
 

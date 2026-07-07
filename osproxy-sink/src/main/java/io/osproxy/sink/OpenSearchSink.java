@@ -93,19 +93,20 @@ public final class OpenSearchSink implements Sink, Reader {
         try {
             HttpClientResponse response = switch (op.op()) {
                 case DocOp.Index(var pid, byte[] doc, var r) ->
-                        withRouting(traced(client.put("/" + index + "/_doc/" + id)), r)
+                        withRouting(traced(client.put("/" + index + "/_doc/" + id), op.target()), r)
                                 .header(io.helidon.http.HeaderNames.CONTENT_TYPE, "application/json")
                                 .submit(doc);
                 case DocOp.Create(var pid, byte[] doc, var r) ->
-                        withRouting(traced(client.put("/" + index + "/_create/" + id)), r)
+                        withRouting(traced(client.put("/" + index + "/_create/" + id), op.target()), r)
                                 .header(io.helidon.http.HeaderNames.CONTENT_TYPE, "application/json")
                                 .submit(doc);
                 case DocOp.Update(var pid, byte[] envelope, var r) ->
-                        withRouting(traced(client.post("/" + index + "/_update/" + id)), r)
+                        withRouting(traced(client.post("/" + index + "/_update/" + id), op.target()), r)
                                 .header(io.helidon.http.HeaderNames.CONTENT_TYPE, "application/json")
                                 .submit(envelope);
                 case DocOp.Delete(var pid, var r) ->
-                        withRouting(traced(client.delete("/" + index + "/_doc/" + id)), r).request();
+                        withRouting(traced(client.delete("/" + index + "/_doc/" + id), op.target()), r)
+                                .request();
             };
             try (response) {
                 breaker(op.target()).onSuccess();
@@ -127,7 +128,9 @@ public final class OpenSearchSink implements Sink, Reader {
         WebClient client = client(target);
         String index = target.index().value();
         var req = withRouting(
-                traced(client.put("/" + index + "/" + (create ? "_create" : "_doc") + "/" + physicalId)),
+                traced(
+                        client.put("/" + index + "/" + (create ? "_create" : "_doc") + "/" + physicalId),
+                        target),
                 routing)
                 .header(io.helidon.http.HeaderNames.CONTENT_TYPE, "application/json");
         try (requestBody) {
@@ -156,14 +159,15 @@ public final class OpenSearchSink implements Sink, Reader {
             throws SinkException {
         WebClient client = client(target);
         return request(target, () -> withRouting(
-                traced(client.get("/" + target.index().value() + "/_doc/" + physicalId)), routing)
+                traced(client.get("/" + target.index().value() + "/_doc/" + physicalId), target),
+                routing)
                 .request());
     }
 
     @Override
     public Response search(Target target, byte[] body) throws SinkException {
         WebClient client = client(target);
-        return request(target, () -> traced(client.post("/" + target.index().value() + "/_search"))
+        return request(target, () -> traced(client.post("/" + target.index().value() + "/_search"), target)
                 .header(io.helidon.http.HeaderNames.CONTENT_TYPE, "application/json")
                 .submit(body.length == 0 ? "{}".getBytes(StandardCharsets.UTF_8) : body));
     }
@@ -171,7 +175,7 @@ public final class OpenSearchSink implements Sink, Reader {
     @Override
     public Response count(Target target, byte[] body) throws SinkException {
         WebClient client = client(target);
-        return request(target, () -> traced(client.post("/" + target.index().value() + "/_count"))
+        return request(target, () -> traced(client.post("/" + target.index().value() + "/_count"), target)
                 .header(io.helidon.http.HeaderNames.CONTENT_TYPE, "application/json")
                 .submit(body.length == 0 ? "{}".getBytes(StandardCharsets.UTF_8) : body));
     }
@@ -201,7 +205,7 @@ public final class OpenSearchSink implements Sink, Reader {
         // as writeStreaming (a transform is only obligated to read it).
         try (requestBody) {
             return request(target, () ->
-                    traced(client.post("/" + target.index().value() + "/" + suffix))
+                    traced(client.post("/" + target.index().value() + "/" + suffix), target)
                             .header(io.helidon.http.HeaderNames.CONTENT_TYPE, "application/json")
                             .outputStream(os -> {
                                 transform.apply(requestBody, os);
@@ -216,7 +220,7 @@ public final class OpenSearchSink implements Sink, Reader {
     public Response searchScroll(Target target, byte[] body, String scrollTtl)
             throws SinkException {
         WebClient client = client(target);
-        return request(target, () -> traced(client.post("/" + target.index().value() + "/_search"))
+        return request(target, () -> traced(client.post("/" + target.index().value() + "/_search"), target)
                 .queryParam("scroll", scrollTtl)
                 .header(io.helidon.http.HeaderNames.CONTENT_TYPE, "application/json")
                 .submit(body.length == 0 ? "{}".getBytes(StandardCharsets.UTF_8) : body));
@@ -225,7 +229,7 @@ public final class OpenSearchSink implements Sink, Reader {
     @Override
     public Response scrollNext(Target target, byte[] body) throws SinkException {
         WebClient client = client(target);
-        return request(target, () -> traced(client.post("/_search/scroll"))
+        return request(target, () -> traced(client.post("/_search/scroll"), target)
                 .header(io.helidon.http.HeaderNames.CONTENT_TYPE, "application/json")
                 .submit(body));
     }
@@ -233,7 +237,7 @@ public final class OpenSearchSink implements Sink, Reader {
     @Override
     public Response scrollDelete(Target target, byte[] body) throws SinkException {
         WebClient client = client(target);
-        return request(target, () -> traced(client.method(io.helidon.http.Method.DELETE))
+        return request(target, () -> traced(client.method(io.helidon.http.Method.DELETE), target)
                 .path("/_search/scroll")
                 .header(io.helidon.http.HeaderNames.CONTENT_TYPE, "application/json")
                 .submit(body));
@@ -243,7 +247,7 @@ public final class OpenSearchSink implements Sink, Reader {
     public Response pitOpen(Target target, String keepAlive) throws SinkException {
         WebClient client = client(target);
         return request(target, () -> traced(client
-                .post("/" + target.index().value() + "/_search/point_in_time"))
+                .post("/" + target.index().value() + "/_search/point_in_time"), target)
                 .queryParam("keep_alive", keepAlive)
                 .request());
     }
@@ -251,7 +255,7 @@ public final class OpenSearchSink implements Sink, Reader {
     @Override
     public Response pitClose(Target target, byte[] body) throws SinkException {
         WebClient client = client(target);
-        return request(target, () -> traced(client.method(io.helidon.http.Method.DELETE))
+        return request(target, () -> traced(client.method(io.helidon.http.Method.DELETE), target)
                 .path("/_search/point_in_time")
                 .header(io.helidon.http.HeaderNames.CONTENT_TYPE, "application/json")
                 .submit(body));
@@ -260,7 +264,7 @@ public final class OpenSearchSink implements Sink, Reader {
     @Override
     public Response searchIndexless(Target target, byte[] body) throws SinkException {
         WebClient client = client(target);
-        return request(target, () -> traced(client.post("/_search"))
+        return request(target, () -> traced(client.post("/_search"), target)
                 .header(io.helidon.http.HeaderNames.CONTENT_TYPE, "application/json")
                 .submit(body.length == 0 ? "{}".getBytes(StandardCharsets.UTF_8) : body));
     }
@@ -272,7 +276,7 @@ public final class OpenSearchSink implements Sink, Reader {
             throws SinkException {
         WebClient client = client(target);
         return request(target, () -> {
-            var req = forwardRequest(client, method, path, query, extraHeaders);
+            var req = forwardRequest(client, target, method, path, query, extraHeaders);
             return body.length == 0 ? req.request() : req.submit(body);
         });
     }
@@ -284,7 +288,7 @@ public final class OpenSearchSink implements Sink, Reader {
             java.util.List<Map.Entry<String, String>> extraHeaders)
             throws SinkException {
         WebClient client = client(target);
-        var req = forwardRequest(client, method, path, query, extraHeaders);
+        var req = forwardRequest(client, target, method, path, query, extraHeaders);
         try {
             // Piped straight through: this handler runs on the calling
             // (virtual) thread as the request is written, so no intermediate
@@ -303,7 +307,7 @@ public final class OpenSearchSink implements Sink, Reader {
 
     /** Builds the shared verbatim-forward request (method/path/query/headers/trace). */
     private static io.helidon.webclient.api.HttpClientRequest forwardRequest(
-            WebClient client, io.osproxy.spi.RequestCtx.HttpMethod method, String path,
+            WebClient client, Target target, io.osproxy.spi.RequestCtx.HttpMethod method, String path,
             String query, java.util.List<Map.Entry<String, String>> extraHeaders) {
         io.helidon.http.Method helidonMethod = switch (method) {
             case GET -> io.helidon.http.Method.GET;
@@ -312,7 +316,7 @@ public final class OpenSearchSink implements Sink, Reader {
             case DELETE -> io.helidon.http.Method.DELETE;
             case HEAD -> io.helidon.http.Method.HEAD;
         };
-        var req = traced(client.method(helidonMethod)).path(path);
+        var req = traced(client.method(helidonMethod), target).path(path);
         if (query != null && !query.isEmpty()) {
             for (String pair : query.split("&")) {
                 int eq = pair.indexOf('=');
@@ -348,25 +352,31 @@ public final class OpenSearchSink implements Sink, Reader {
 
     /**
      * Injects the current request's {@code traceparent} when a trace is
-     * bound, and the client's forwarded header set when one is bound — the
-     * one choke point where the proxy's causal chain and (when configured)
-     * the client's own headers reach the upstream, for every call this sink
-     * makes (write, read, cursor, and verbatim forward alike). No header
-     * plumbing through the engine: the ingress binds
+     * bound, the client's forwarded header set when one is bound, and the
+     * target's own upstream credential when its {@code TenancySpi} supplied
+     * one — the one choke point where the proxy's causal chain and (when
+     * configured) auth reach the upstream, for every call this sink makes
+     * (write, read, cursor, and verbatim forward alike). No header plumbing
+     * through the engine for the first two: the ingress binds
      * {@link io.osproxy.core.ForwardHeaders#CURRENT} once per request, this
      * is the only place that reads it.
      *
-     * <p>Forwarded headers are applied first, the proxy's own {@code
-     * traceparent} last: pass-all forwarding carries the client's own {@code
-     * traceparent} through like any other header (the client's original
-     * value), but the proxy's minted child-span value is the one that must
-     * reach the upstream so the causal chain (client → proxy → upstream)
-     * stays intact, not replaced by the client's original value.
+     * <p>Order matters: forwarded headers first, then the target's
+     * credential (so an SPI-supplied credential overwrites a same-named
+     * header the client forwarded — the proxy's own upstream identity is
+     * deliberate, not passthrough, when both are configured), then the
+     * proxy's own {@code traceparent} last (pass-all forwarding carries the
+     * client's own {@code traceparent} through like any other header, but
+     * the proxy's minted child-span value is the one that must reach the
+     * upstream so the causal chain stays intact).
      */
-    private static <T extends io.helidon.webclient.api.ClientRequest<T>> T traced(T request) {
+    private static <T extends io.helidon.webclient.api.ClientRequest<T>> T traced(
+            T request, Target target) {
         for (Map.Entry<String, String> header : io.osproxy.core.ForwardHeaders.currentOrEmpty()) {
             request.header(io.helidon.http.HeaderNames.create(header.getKey()), header.getValue());
         }
+        target.credentials().ifPresent(creds -> request.header(
+                io.helidon.http.HeaderNames.create(creds.headerName()), creds.headerValue()));
         if (io.osproxy.core.Tracing.CURRENT.isBound()) {
             request.header(
                     io.helidon.http.HeaderNames.create("traceparent"),
