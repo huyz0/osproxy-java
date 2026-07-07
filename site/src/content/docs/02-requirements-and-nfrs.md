@@ -11,7 +11,22 @@ page is the summary, not aspirational.
   `DocumentService` (single-doc ingest) rides the same port too, mirroring the
   Rust `osproxy` sibling's gRPC surface; see
   [Architecture](/osproxy-java/03-architecture/).
-- **Single-target routing** for **all** request types (read and write).
+- **Single-target routing** for **all** request types (read and write),
+  resolved by `TenancySpi` into one of three placement kinds — `SharedIndex`
+  (many partitions, one physical index, isolated by an injected field + a
+  partition-prefixed id), `DedicatedIndex` (one physical index per
+  partition), `DedicatedCluster` (one whole cluster per partition).
+  `routingHint` lets a `SharedIndex` implementer override the `_routing`
+  wire value independently of the partition-prefixed id. See
+  [The SPI](/osproxy-java/05-spi-guide/).
+- **Tenant-agnostic passthrough** (opt-in, index-prefix scoped): requests
+  whose logical index matches a configured `passthrough-indices` prefix skip
+  tenancy entirely and forward verbatim.
+- **Async write mode** (opt-in, per-request `x-osproxy-write-mode: async`
+  header): honest `202 Accepted` + an `op_id` handed to a pluggable queue
+  producer (`osproxy-kafka`); refuses rather than silently downgrading to
+  sync when no producer is configured. See
+  [Async Clients](/osproxy-java/09-async-clients/).
 - **Ingest demux**: one mixed-partition `_bulk` body split into per-placement
   writes, response `items[]` re-interleaved in original order.
 - **Query rewrite** (mandatory partition filter) and **response
@@ -29,9 +44,8 @@ page is the summary, not aspirational.
   silently dialed in cleartext or trusted via the JDK's platform store.
 - **Scroll/PIT affinity** pinning (opt-in, HMAC-sealed).
 - **Epoch-gated partition migration**.
-- **Pluggable write sink** (OpenSearch now; the `Sink` interface makes a
-  Kafka-backed async write mode a drop-in, see `osproxy-kafka`).
-- **Tenant-agnostic passthrough** (opt-in, index-prefix scoped).
+- **Pluggable write sink** (OpenSearch now; the `Sink` interface is the seam
+  the async fan-out producer above plugs into).
 - **Runtime-togglable, shape-only observability.**
 
 ### Supported endpoint matrix
