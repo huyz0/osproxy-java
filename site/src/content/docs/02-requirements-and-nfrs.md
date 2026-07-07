@@ -19,8 +19,14 @@ page is the summary, not aspirational.
 - **Doc-id construction** and **partition-field injection** on ingest.
 - **Connection pooling**: per-cluster `WebClient` pools with a circuit
   breaker upstream; virtual threads downstream (no thread-per-request cost).
-- **Auth**: bearer-token client authentication; upstream credential
-  management.
+- **Auth**: bearer-token client authentication. Upstream authentication is
+  either the client's own forwarded credential (pass-through) or an SPI-
+  supplied one (`TenancySpi.upstreamCredentials`, resolved fresh per route,
+  overwrites a same-named forwarded header) — see
+  [The SPI](/osproxy-java/05-spi-guide/). Upstream TLS/mTLS
+  (`osproxy.upstream-tls.*`) is independent of ingress TLS and fails closed:
+  an `https://` cluster with no trust anchor configured is refused, never
+  silently dialed in cleartext or trusted via the JDK's platform store.
 - **Scroll/PIT affinity** pinning (opt-in, HMAC-sealed).
 - **Epoch-gated partition migration**.
 - **Pluggable write sink** (OpenSearch now; the `Sink` interface makes a
@@ -98,6 +104,7 @@ comparable; a Java-specific note follows where the platform changes what
 | NFR-S3 | Header-delivered debug directives are HMAC-signed; clients cannot self-enable expensive tracing. |
 | NFR-S4 | Partition isolation enforced on the read path; a client-supplied query cannot bypass the partition filter. |
 | NFR-S5 | The FIPS build (`osproxy.fips=true`) engages BouncyCastle FIPS in approved-only mode and pins the TLS listener to an approved cipher/protocol set. |
+| NFR-S6 | An `https://` upstream cluster with no `osproxy.upstream-tls.ca-path` configured is refused (`SinkException`), never dialed in cleartext or trusted via an implicit platform trust store. |
 
 ### Maintainability / quality (NFR-Q)
 
