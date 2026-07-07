@@ -17,16 +17,14 @@ page is the summary, not aspirational.
   partition-prefixed id), `DedicatedIndex` (one physical index per
   partition), `DedicatedCluster` (one whole cluster per partition).
   `routingHint` lets a `SharedIndex` implementer override the `_routing`
-  wire value independently of the partition-prefixed id. See
-  [The SPI](/osproxy-java/05-spi-guide/).
+  wire value independently of the partition-prefixed id.
 - **Tenant-agnostic passthrough** (opt-in, index-prefix scoped): requests
   whose logical index matches a configured `passthrough-indices` prefix skip
   tenancy entirely and forward verbatim.
 - **Async write mode** (opt-in, per-request `x-osproxy-write-mode: async`
   header): honest `202 Accepted` + an `op_id` handed to a pluggable queue
   producer (`osproxy-kafka`); refuses rather than silently downgrading to
-  sync when no producer is configured. See
-  [Async Clients](/osproxy-java/09-async-clients/).
+  sync when no producer is configured.
 - **Ingest demux**: one mixed-partition `_bulk` body split into per-placement
   writes, response `items[]` re-interleaved in original order.
 - **Query rewrite** (mandatory partition filter) and **response
@@ -37,8 +35,7 @@ page is the summary, not aspirational.
 - **Auth**: bearer-token client authentication. Upstream authentication is
   either the client's own forwarded credential (pass-through) or an SPI-
   supplied one (`TenancySpi.upstreamCredentials`, resolved fresh per route,
-  overwrites a same-named forwarded header) — see
-  [The SPI](/osproxy-java/05-spi-guide/). Upstream TLS/mTLS
+  overwrites a same-named forwarded header). Upstream TLS/mTLS
   (`osproxy.upstream-tls.*`) is independent of ingress TLS and fails closed:
   an `https://` cluster with no trust anchor configured is refused, never
   silently dialed in cleartext or trusted via the JDK's platform store.
